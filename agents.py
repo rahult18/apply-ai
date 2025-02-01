@@ -23,7 +23,7 @@ class JobScraperAgent:
         }
         
         filter_terms = experience_filters.get(self.experience, '')
-        return f'site:job-boards.greenhouse.io OR site:jobs.ashbyhq.com OR site:jobs.lever.co "{self.position}" AND "united states" {filter_terms}'
+        return f'site:job-boards.greenhouse.io "{self.position}" AND "united states" {filter_terms}'
     
     def _parse_job_listings(self, search_results: Dict) -> List[Dict]:
         job_listings = []
