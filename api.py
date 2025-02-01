@@ -40,8 +40,9 @@ class JobListing(BaseModel):
     """
     job_title: str
     job_link: str
-    job_description: str
-    date_posted: Optional[str]
+    # Make it optional with default None
+    job_description: Optional[str] = None  
+    date_posted: Optional[str] = None
     status: str
 
 class SearchResponse(BaseModel):
@@ -49,7 +50,6 @@ class SearchResponse(BaseModel):
         Model for the search response containing run_id and job listings
     """
     run_id: str
-    jobs: List[JobListing]
     
 class EventResponse(BaseModel):
     """
@@ -132,14 +132,16 @@ async def create_search(request: SearchRequest, background_tasks: BackgroundTask
                 )
             )
             job['job_description'] = "" 
-            job['status'] = "PENDING_JD"
+            job_id = cur.fetchone()[0]
+            # store the job_id
+            job['job_id'] = job_id  
             stored_jobs.append(job)
         
         # Adding background task for fetching job descriptions
         background_tasks.add_task(scraper.process_job_descriptions, stored_jobs)
         
         conn.commit()
-        return SearchResponse(run_id=run_id, jobs=stored_jobs)
+        return SearchResponse(run_id=run_id)
     
     except Exception as e:
         conn.rollback()
@@ -160,12 +162,9 @@ async def get_run_events(run_id: str):
     cur = conn.cursor()
     
     try:
-        # First check if run exists
+        # Check if run exists
         cur.execute(
-            """
-            SELECT status FROM runs 
-            WHERE run_id = %s
-            """,
+            "SELECT status FROM runs WHERE run_id = %s",
             (run_id,)
         )
         run = cur.fetchone()
@@ -178,8 +177,8 @@ async def get_run_events(run_id: str):
             SELECT 
                 job_id,
                 job_title,
-                status,
-                job_link
+                job_link,
+                status
             FROM jobs
             WHERE run_id = %s
             """,
@@ -192,20 +191,19 @@ async def get_run_events(run_id: str):
         all_statuses = set()
         
         for job in jobs:
-            job_id, job_title, status, job_link = job
+            job_id, job_title, job_link, status = job
             all_statuses.add(status)
             
+            # Create JobEvent objects instead of JobListing
             job_events.append(JobEvent(
                 job_id=job_id,
                 job_title=job_title,
-                status=status,
-                job_link=job_link
+                job_link=job_link,
+                status=status
             ))
         
-        # Get events from event store for this run
+        # Get event history
         run_events = event_store.get_events(run_id)
-        
-        # Convert Event objects to EventResponse
         event_responses = [
             EventResponse(timestamp=event.timestamp, data=event.data)
             for event in run_events
@@ -221,7 +219,7 @@ async def get_run_events(run_id: str):
         return RunEvents(
             run_id=run_id,
             status=overall_status,
-            jobs=job_events,
+            jobs=job_events,  # Now using job_events instead of job_listings
             events=event_responses
         )
             
@@ -230,7 +228,6 @@ async def get_run_events(run_id: str):
     finally:
         cur.close()
         conn.close()
-
 
 @app.get("/api/job/{job_id}")
 async def get_job_events(job_id: str) -> List[Event]:

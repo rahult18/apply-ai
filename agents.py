@@ -139,7 +139,8 @@ class JobScraperAgent:
             job: Dictionary containing job information
         """
         try:
-            print(f"\n[DEBUG] Starting to fetch JD for job: {job['job_title']}")
+            print(f"\n[DEBUG] Starting JD fetch for job_id: {job['job_id']}, title: {job['job_title']}")
+            print(f"[DEBUG] Job URL: {job['job_link']}")
             conn = psycopg2.connect(**DB_CONFIG)
             cur = conn.cursor()
             
@@ -154,6 +155,7 @@ class JobScraperAgent:
                     (job['job_link'], self.run_id)
                 )
                 conn.commit()
+                print(f"[DEBUG] Updated status to FETCHING_JD for job_id: {job['job_id']}")
                 
                 browser = await p.chromium.launch()
                 page = await browser.new_page()
@@ -164,6 +166,7 @@ class JobScraperAgent:
                     
                     if description_element:
                         job_description = await description_element.inner_text()
+                        print(f"[DEBUG] Extracted description for job_id: {job['job_id']} (length: {len(job_description)})")
                         
                         # Update database with fetched description
                         cur.execute(
@@ -182,6 +185,7 @@ class JobScraperAgent:
                         )
                     
                 except Exception as e:
+                    print(f"[DEBUG] Error fetching description for job_id: {job['job_id']}: {str(e)}")
                     # handle failures in description fetching
                     cur.execute(
                         """
@@ -203,6 +207,7 @@ class JobScraperAgent:
                     await browser.close()
                     
         except Exception as e:
+            print(f"[DEBUG] Critical error in fetch_job_description for job_id: {job['job_id']}: {str(e)}")
             self.event_store.add_event(
                 self.run_id,
                 f"Error in fetch_job_description: {str(e)}"
@@ -219,5 +224,7 @@ class JobScraperAgent:
         Args:
             jobs: List of job listings to process
         """
+        print(f"[DEBUG] Starting to process {len(jobs)} job descriptions")
         tasks = [self.fetch_job_description(job) for job in jobs]
         await asyncio.gather(*tasks)
+        print("[DEBUG] Completed processing all job descriptions")
