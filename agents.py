@@ -273,27 +273,48 @@ class ResumeTailorAgent:
             Returns:
                 str: Formatted prompt
         """
-        return f"""You are an expert ATS-compatible resume writer. Your task is to tailor a resume to match a specific job description.
-                Please modify only these specific sections of the resume to better match the job description:
-                1. summary
-                2. skills (keep categories but reorder/emphasize relevant ones)
-                3. workExperience[].responsibilities
-                4. projects[].description
+        return f"""You are an expert ATS resume optimizer and tailoring specialist. Your task is to modify a JSON resume to maximize its match with a specific job description while maintaining authenticity and professional standards.
 
-                Job Description:
-                {job_description}
+            Key Instructions:
+            1. Analyze the job description first, identifying:
+            - Required technical skills and tools
+            - Key responsibilities and deliverables
+            - Industry-specific terminology and frameworks
+            - Soft skills and cultural requirements
 
-                Resume to Tailor (in JSON):
-                {json.dumps(resume, indent=2)}
+            2. Modify ONLY these resume sections to align with the job requirements:
+            - summary: Rewrite to emphasize relevant experience and skills that match the job
+            - skills: Reorder categories and items to prioritize relevant skills first
+            - workExperience[].responsibilities: Adjust language and emphasis to match job requirements
+            - projects[].description: Highlight aspects that demonstrate relevant expertise
 
-                Requirements:
-                1. Keep the exact same JSON structure
-                2. Only modify the specified fields
-                3. Maintain professional tone and quantifiable achievements
-                4. Emphasize relevant technical skills and experiences
-                5. Return only the modified JSON, no explanations or additional text
+            3. Follow these optimization rules:
+            - Use strong action verbs from the job description
+            - Include specific metrics and quantifiable achievements
+            - Mirror the job description's key terminology
+            - Maintain professional tone and factual accuracy
+            - Keep all modifications realistic and truthful
+            - Ensure all technical terms are used in proper context
+            - Preserve original structure and formatting of the JSON
 
-                The output must be valid JSON that can be parsed. Return ONLY the JSON object."""
+            4. ATS Optimization Requirements:
+            - Use standard industry terms, not abbreviations
+            - Include relevant keywords from the job description naturally
+            - Maintain proper JSON structure for parsing
+            - Keep formatting clean and consistent
+
+            Input Job Description:
+            {job_description}
+
+            Resume to Optimize (JSON format):
+            {json.dumps(resume, indent=2)}
+
+            Response Requirements:
+            1. Return ONLY the modified JSON object
+            2. Maintain exact same JSON structure
+            3. Ensure output is valid, parseable JSON
+            4. No explanations or additional text
+            5. No Markdown code block markers"""        
         
     async def tailor_resume(self, job: dict) -> dict:
         """
