@@ -6,6 +6,8 @@ import asyncio
 import psycopg2
 import os
 from dotenv import load_dotenv
+from groq import Groq
+import json
 
 # Load environment variables
 load_dotenv()
@@ -228,3 +230,149 @@ class JobScraperAgent:
         tasks = [self.fetch_job_description(job) for job in jobs]
         await asyncio.gather(*tasks)
         print("[DEBUG] Completed processing all job descriptions")
+        
+
+class ResumeTailorAgent:
+    """
+        AI agent responsible for tailoring resumes based on job descriptions
+        Uses Mixtral model via Groq for customization
+    """
+    
+    def __init__(self, run_id: str, event_store: EventStore):
+        """
+            Initialize the tailor agent with tracking and API clients
+            
+            Args:
+                run_id: Unique identifier for this job search run
+                event_store: EventStore instance for tracking progress
+        """
+        self.run_id = run_id
+        self.event_store = event_store
+        self.client = Groq(
+            api_key=os.getenv("GROQ_API_KEY")
+        )
+        
+    def _load_resume(self) -> dict:
+        """
+            Loads the user's resume from JSON file
+            
+            Returns:
+                dict: Resume data
+        """
+        with open('user_resume.json', 'r') as f:
+            return json.load(f)
+            
+    def _create_prompt(self, resume: dict, job_description: str) -> str:
+        """
+            Creates the prompt for the AI model
+            
+            Args:
+                resume: Original resume data
+                job_description: Job description to tailor for
+                
+            Returns:
+                str: Formatted prompt
+        """
+        return f"""You are an expert ATS-compatible resume writer. Your task is to tailor a resume to match a specific job description.
+                Please modify only these specific sections of the resume to better match the job description:
+                1. summary
+                2. skills (keep categories but reorder/emphasize relevant ones)
+                3. workExperience[].responsibilities
+                4. projects[].description
+
+                Job Description:
+                {job_description}
+
+                Resume to Tailor (in JSON):
+                {json.dumps(resume, indent=2)}
+
+                Requirements:
+                1. Keep the exact same JSON structure
+                2. Only modify the specified fields
+                3. Maintain professional tone and quantifiable achievements
+                4. Emphasize relevant technical skills and experiences
+                5. Return only the modified JSON, no explanations or additional text
+
+                The output must be valid JSON that can be parsed. Return ONLY the JSON object."""
+        
+    async def tailor_resume(self, job: dict) -> dict:
+        """
+            Tailors the resume for a specific job
+            
+            Args:
+                job: Dictionary containing job information including description
+                
+            Returns:
+                dict: Tailored resume data
+        """
+        try:
+            self.event_store.add_event(
+                self.run_id,
+                f"Starting resume tailoring for job: {job['job_title']}"
+            )
+            
+            print(f"\n[DEBUG] Starting resume tailoring for job id: {job['job_id']}")
+            
+            # Load original resume
+            resume = self._load_resume()
+            
+            # Create prompt for the model
+            prompt = self._create_prompt(resume, job['job_description'])
+            
+            # Get tailored resume from Mixtral
+            completion = self.client.chat.completions.create(
+                model="mixtral-8x7b-32768",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert ATS resume tailoring assistant. You excel at modifying resumes to match job descriptions while maintaining proper JSON structure."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.1,  # Lower temperature for more consistent JSON output
+                top_p=0.9,
+                max_tokens=4000,
+                stream=False
+            )
+            
+            # Parse the response
+            response_content = completion.choices[0].message.content.strip()
+            # Remove any markdown code block markers if present
+            if response_content.startswith("```json"):
+                response_content = response_content[7:-3]
+            elif response_content.startswith("```"):
+                response_content = response_content[3:-3]
+                
+            tailored_resume = json.loads(response_content)
+            
+            print(f"\n[DEBUG] Successfully tailored resume for job id: {job['job_id']}")
+            
+            self.event_store.add_event(
+                self.run_id,
+                f"Successfully tailored resume for job: {job['job_title']}"
+            )
+            
+            return tailored_resume
+            
+        except json.JSONDecodeError as e:
+            error_msg = f"JSON parsing error: {str(e)}"
+            print(f"\n[DEBUG] {error_msg}")
+            self.event_store.add_event(
+                self.run_id,
+                f"Error tailoring resume for {job['job_title']}: {error_msg}"
+            )
+            raise
+            
+        except Exception as e:
+            error_msg = f"Error during resume tailoring: {str(e)}"
+            print(f"\n[DEBUG] {error_msg}")
+            self.event_store.add_event(
+                self.run_id,
+                f"Error tailoring resume: {error_msg}"
+            )
+            raise       
+        
+        

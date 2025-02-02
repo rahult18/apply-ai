@@ -1,0 +1,106 @@
+{
+    "personalInfo": {
+      "name": "Rahul Reddy Talatala",
+      "location": "Buffalo, NY",
+      "contact": {
+        "phone": "716-939-5940",
+        "email": "rtalatal@buffalo.edu",
+        "linkedin": "linkedin.com/in/rahul-reddy-t",
+        "portfolio": "rahultalatala.netlify.app",
+        "github": "github.com/rahult18"
+      }
+    },
+    "summary": "AWS Certified Developer and Data-driven Engineer specializing in cloud-native solutions and legacy system modernization. Proven expertise in optimizing system performance through Azure DevOps and distributed architectures. Designs and deploys scalable solutions ranging from real-time data pipelines to production ML models, leveraging AWS and Azure to build robust microservices-based architectures.",
+    "skills": {
+      "languagesAndTools": ["Python", "Java", "JavaScript", "SQL", "TypeScript", "C", "R", "Docker", "Git"],
+      "machineLearning": ["PyTorch", "TensorFlow", "Scikit-learn", "LangChain", "Hugging-Face", "spaCy", "NumPy", "Pandas"],
+      "bigDataAndCloud": ["Apache Spark", "Kafka", "Hadoop", "AWS Services", "Azure DevOps", "ETL Pipelines", "Data Modeling"],
+      "webAndDatabases": ["React", "Node.js", "Spring Boot", "REST APIs", "MySQL", "MongoDB", "PostgreSQL", "Redis"],
+      "developmentTools": ["Jenkins", "GitHub Actions", "MLflow", "Grafana", "Prometheus", "JIRA", "Confluence", "Terraform"]
+    },
+    "workExperience": [
+      {
+        "title": "Software Engineer Intern",
+        "company": "Eminent Services Corporation",
+        "location": "Frederick, MD",
+        "period": "May 2024 -- Present",
+        "responsibilities": [
+          "Redesigned legacy VB6 application into MERN stack with modular React components, improving scalability by 35% and reducing maintenance efforts by 40%",
+          "Engineered cloud-native deployment pipeline using Azure Pipelines and App Service, reducing deployment time by 30%",
+          "Developed data migration plan with schema evolution and event logging, reducing manual cleanup by 75% while ensuring zero downtime"
+        ]
+      },
+      {
+        "title": "Graduate Student Researcher",
+        "company": "University at Buffalo",
+        "location": "Buffalo, NY",
+        "period": "Jan. 2024 -- May 2024",
+        "responsibilities": [
+          "Optimized energy efficiency in GPT-2 using quantization techniques, reducing CO2 emissions by 19.8% while maintaining model performance",
+          "Investigated combined distillation & quantization methods, achieving 45.2% emissions reduction in language model training",
+          "Published findings in departmental research paper and presented optimization techniques at graduate research symposium"
+        ]
+      },
+      {
+        "title": "Solutions Engineer Intern & FTE",
+        "company": "Swym Corporation",
+        "location": "Bangalore, India",
+        "period": "Sept. 2022 -- Aug. 2023",
+        "responsibilities": [
+          "Enhanced user experiences for 30+ e-commerce stores by engineering custom wishlist solutions with REST APIs",
+          "Improved system efficiency by 12% through optimizing server-side caching mechanisms and addressing performance bottlenecks",
+          "Created comprehensive internal knowledge base tool, reducing support ticket resolution time by 25% and improving team collaboration"
+        ]
+      }
+    ],
+    "education": [
+      {
+        "institution": "University at Buffalo, The State University of New York",
+        "location": "Buffalo, NY",
+        "degree": "Master of Science in Computer Science"
+      },
+      {
+        "institution": "Vellore Institute of Technology",
+        "location": "Chennai, India",
+        "degree": "Bachelor of Technology in Computer Science"
+      }
+    ],
+    "projects": [
+      {
+        "name": "AtmoFlow",
+        "technologies": ["PySpark", "Python", "GCP Services", "Apache Spark"],
+        "githubLink": "https://github.com/rahult18/atmo-flow",
+        "description": "Built end-to-end weather and air quality pipeline processing 650+ days of data with 99.9% uptime using GCP services and Apache Spark, improving data warehouse performance by 40% through star schema design"
+      },
+      {
+        "name": "NYC Taxi Fare Prediction",
+        "technologies": ["Python", "Kafka", "PySpark", "MLflow", "Streamlit"],
+        "githubLink": "https://github.com/rahult18/NYC-Yellow-Taxi-Trip-Data-Pipeline",
+        "description": "Developed scalable data pipeline processing 4M monthly taxi records using Kafka/PySpark, trained Random Forest model (R² = 0.94) for fare prediction"
+      },
+      {
+        "name": "SecureStack",
+        "technologies": ["AWS EKS", "ArgoCD", "SonarQube", "Grafana"],
+        "githubLink": "https://github.com/rahult18/secure-stack",
+        "description": "Achieved zero-downtime deployments and 60% faster recovery using AWS EKS, ArgoCD, and automated security scanning"
+      }
+    ],
+    "certificationsAndAchievements": {
+      "certifications": [
+        {
+          "name": "AWS Certified Developer – Associate",
+          "year": "2024",
+          "link": "https://www.credly.com/badges/bccb90d0-0adc-470e-94e6-056d7e29d19e/public_url"
+        },
+        {
+          "name": "Oracle Database Design & Programming with SQL",
+          "year": "2020",
+          "link": "https://drive.google.com/file/d/1pdpsw93k8u9Qav3EAhtmyGRXvqFsihwq/view?usp=sharing"
+        }
+      ],
+      "achievements": [
+        "Led CodeChef-VIT as Design & Operations Lead",
+        "Won 'Best Hack for Social Good' award at TechnoVIT hackathon"
+      ]
+    }
+  }

@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 import os
 from typing import List, Optional
 from job_manager import Event, EventStore
-from agents import JobScraperAgent
+from agents import JobScraperAgent, ResumeTailorAgent
+import json
 
 
 # Load environment variables
@@ -76,6 +77,22 @@ class RunEvents(BaseModel):
     jobs: List[JobEvent]
     # storing events at run level
     events: List[EventResponse]  
+
+class TailoredResume(BaseModel):
+    """
+    Model for storing tailored resume data
+    """
+    job_id: str
+    tailored_resume: dict
+
+class TailorResponse(BaseModel):
+    """
+    Response model for resume tailoring endpoint
+    """
+    run_id: str
+    tailored_resumes: List[TailoredResume]
+    
+
 
 # Initialize event store for tracking job processing events
 event_store = EventStore()
@@ -229,18 +246,109 @@ async def get_run_events(run_id: str):
         cur.close()
         conn.close()
 
-@app.get("/api/job/{job_id}")
-async def get_job_events(job_id: str) -> List[Event]:
+
+@app.post("/api/run/{run_id}/tailor", response_model=TailorResponse)
+async def tailor_resumes(run_id: str):
+    """
+    Endpoint to tailor resumes for all jobs with fetched descriptions
+    Only processes jobs with status 'JD_FETCHED'
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     
     try:
-       pass
+        # Check if run exists
+        cur.execute(
+            "SELECT status FROM runs WHERE run_id = %s",
+            (run_id,)
+        )
+        run = cur.fetchone()
+        print("\n[DEBUG] Run exists")
+        if not run:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        
+        # Get all jobs with fetched descriptions
+        cur.execute(
+            """
+            SELECT 
+                job_id,
+                job_title,
+                job_description
+            FROM jobs
+            WHERE run_id = %s AND status = 'JD_FETCHED'
+            """,
+            (run_id,)
+        )
+        jobs = cur.fetchall()
+        print("\n[DEBUG] Fetching jobs for the given run")
+        
+        if not jobs:
+            raise HTTPException(
+                status_code=404, 
+                detail="No jobs found with fetched descriptions"
+            )
+        
+        # Initialize tailor agent
+        tailor_agent = ResumeTailorAgent(run_id, event_store)
+        tailored_resumes = []
+        
+        # Process each job
+        for job in jobs:
+            job_id, job_title, job_description = job
+            job_dict = {
+                'job_id': job_id,
+                'job_title': job_title,
+                'job_description': job_description
+            }
+            
+            try:
+                # Tailor resume
+                tailored_resume = await tailor_agent.tailor_resume(job_dict)
+                
+                # Store tailored resume in database
+                cur.execute(
+                    """
+                    UPDATE jobs 
+                    SET tailored_resume = %s,
+                        status = 'RESUME_TAILORED'
+                    WHERE job_id = %s
+                    """,
+                    (json.dumps(tailored_resume), job_id)
+                )
+                
+                tailored_resumes.append(TailoredResume(
+                    job_id=job_id,
+                    tailored_resume=tailored_resume
+                ))
+                
+            except Exception as e:
+                # Handle individual job failures
+                cur.execute(
+                    """
+                    UPDATE jobs 
+                    SET status = 'TAILOR_FAILED'
+                    WHERE job_id = %s
+                    """,
+                    (job_id,)
+                )
+                event_store.add_event(
+                    run_id,
+                    f"Failed to tailor resume for job {job_id}: {str(e)}"
+                )
+        
+        conn.commit()
+        return TailorResponse(
+            run_id=run_id,
+            tailored_resumes=tailored_resumes
+        )
+        
     except Exception as e:
-        pass
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cur.close()
         conn.close()
+
 
 if __name__ == "__main__":
     import uvicorn
