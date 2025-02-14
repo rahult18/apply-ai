@@ -116,3 +116,90 @@ Database Structure:
 Output Requirements:
 
 - Ensure that the system efficiently processes user inputs, manages multi-threading for concurrent job applications, and provides real-time updates to the user regarding their application status.
+
+Supabase Tables:
+1. jobs
+[
+  {
+    "column_name": "date_posted",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "date"
+  },
+  {
+    "column_name": "tailored_resume",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "jsonb"
+  },
+  {
+    "column_name": "job_id",
+    "column_default": "gen_random_uuid()",
+    "is_nullable": "NO",
+    "data_type": "uuid"
+  },
+  {
+    "column_name": "job_description",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  },
+  {
+    "column_name": "status",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  },
+  {
+    "column_name": "run_id",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  },
+  {
+    "column_name": "job_title",
+    "column_default": null,
+    "is_nullable": "NO",
+    "data_type": "text"
+  },
+  {
+    "column_name": "job_link",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  }
+]
+
+2. runs
+[
+  {
+    "column_name": "timestamp",
+    "column_default": null,
+    "is_nullable": "NO",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "column_name": "run_id",
+    "column_default": null,
+    "is_nullable": "NO",
+    "data_type": "text"
+  },
+  {
+    "column_name": "position",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  },
+  {
+    "column_name": "status",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  },
+  {
+    "column_name": "experience",
+    "column_default": null,
+    "is_nullable": "YES",
+    "data_type": "text"
+  }
+]
