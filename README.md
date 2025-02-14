@@ -118,88 +118,81 @@ Output Requirements:
 - Ensure that the system efficiently processes user inputs, manages multi-threading for concurrent job applications, and provides real-time updates to the user regarding their application status.
 
 Supabase Tables:
-1. jobs
-[
-  {
-    "column_name": "date_posted",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "date"
-  },
-  {
-    "column_name": "tailored_resume",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "jsonb"
-  },
-  {
-    "column_name": "job_id",
-    "column_default": "gen_random_uuid()",
-    "is_nullable": "NO",
-    "data_type": "uuid"
-  },
-  {
-    "column_name": "job_description",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  },
-  {
-    "column_name": "status",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  },
-  {
-    "column_name": "run_id",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  },
-  {
-    "column_name": "job_title",
-    "column_default": null,
-    "is_nullable": "NO",
-    "data_type": "text"
-  },
-  {
-    "column_name": "job_link",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  }
-]
+-- Enable UUID generation
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-2. runs
-[
-  {
-    "column_name": "timestamp",
-    "column_default": null,
-    "is_nullable": "NO",
-    "data_type": "timestamp with time zone"
-  },
-  {
-    "column_name": "run_id",
-    "column_default": null,
-    "is_nullable": "NO",
-    "data_type": "text"
-  },
-  {
-    "column_name": "position",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  },
-  {
-    "column_name": "status",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  },
-  {
-    "column_name": "experience",
-    "column_default": null,
-    "is_nullable": "YES",
-    "data_type": "text"
-  }
-]
+-- Searches table to track overall search processes
+CREATE TABLE searches (
+    search_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    position VARCHAR(255) NOT NULL,
+    experience_level VARCHAR(50) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'CREATED',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    results JSONB DEFAULT '{}'::jsonb
+);
+
+-- Events table for detailed tracking of the entire process
+CREATE TABLE events (
+    event_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    search_id UUID REFERENCES searches(search_id) ON DELETE CASCADE,
+    agent_type VARCHAR(50) NOT NULL,  -- 'SEARCHER', 'SCRAPER', 'TAILOR'
+    event_type VARCHAR(50) NOT NULL,  -- 'INFO', 'ERROR', 'SUCCESS'
+    details JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create index for faster event retrieval
+CREATE INDEX idx_events_search_id ON events(search_id);
+
+-- Create trigger to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_searches_updated_at
+    BEFORE UPDATE ON searches
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Add RLS policies
+ALTER TABLE searches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+
+-- Create policies (adjust according to your auth setup)
+CREATE POLICY "Enable read access for all users" ON searches
+    FOR SELECT
+    USING (true);
+
+CREATE POLICY "Enable read access for all users" ON events
+    FOR SELECT
+    USING (true);
+
+-- Optional: Create a view for easier querying of search status with events
+CREATE VIEW search_status AS
+SELECT 
+    s.search_id,
+    s.position,
+    s.experience_level,
+    s.status,
+    s.created_at,
+    s.updated_at,
+    COUNT(e.event_id) as event_count,
+    jsonb_agg(e.details ORDER BY e.created_at) as event_history
+FROM searches s
+LEFT JOIN events e ON s.search_id = e.search_id
+GROUP BY s.search_id, s.position, s.experience_level, s.status, s.created_at, s.updated_at;
+
+Expected File directory structure:
+job_search_system/
+├── .env                # Environment variables (API keys)
+├── user_resume.json    # User resume details in JSON
+├── main.py        # FastAPI app + endpoints (minimal) 
+├── agents.py      # All agents (Searcher, Scraper, Tailor)
+├── tools.py       # Shared tools (Serper, Playwright, Groq)
+├── crew.py        # CrewAI coordination
+└── db.py          # Supabase client
