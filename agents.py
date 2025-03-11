@@ -5,30 +5,31 @@ import json
 import asyncio
 from typing import Dict, List
 import datetime
+from registry import register_agent, get_search_id
 
 class JobSearchAgent(Agent):
     def __init__(self, search_id: str):
-        self.search_id = search_id
-        print("\n[DEBUG] search_id: ", search_id)
         super().__init__(
             role='Job Searcher',
             goal='Find relevant job postings on Greenhouse',
             backstory='I am an AI agent specialized in finding relevant job postings',
             allow_delegation=False,
             verbose=True,
-            # Add search_id as a metadata property
-            metadata={"search_id": search_id}
         )
+
+        # Register the agent with the search_id
+        register_agent(self, search_id)
 
     async def execute(self, position: str, experience_level: str) -> List[Dict]:
         try:
-            # Search for jobs
-            print("\n[DEBUG] starting search for jobs")
+            # Get the search_id from the registry
+            search_id = get_search_id(self)
+            print(f"\n[DEBUG] starting search for jobs with search_id: {search_id}")
             jobs = await tools.search_jobs(position, experience_level)
             
             # Log success event
             await db_client.log_event(
-                self.search_id,
+                search_id,
                 "SEARCHER",
                 "SUCCESS",
                 {"jobs_found": len(jobs)}
@@ -45,8 +46,9 @@ class JobSearchAgent(Agent):
             return detailed_jobs
             
         except Exception as e:
+            search_id = get_search_id(self)
             await db_client.log_event(
-                self.search_id,
+                search_id,
                 "SEARCHER",
                 "ERROR",
                 {"error": str(e)}
@@ -60,8 +62,9 @@ class JobSearchAgent(Agent):
             job["description"] = description
             return job
         except Exception as e:
+            search_id = get_search_id(self)
             await db_client.log_event(
-                self.search_id,
+                search_id,
                 "SEARCHER",
                 "ERROR",
                 {"error": f"Failed to fetch job details: {str(e)}", "job": job}
@@ -70,20 +73,19 @@ class JobSearchAgent(Agent):
 
 class ResumeTailorAgent(Agent):
     def __init__(self, search_id: str):
-        self.search_id = search_id
         super().__init__(
             role='Resume Tailor',
             goal='Customize resumes for specific job postings',
             backstory='I am an AI agent specialized in tailoring resumes to match job requirements',
             allow_delegation=False,
             verbose=True,
-            # Add search_id as a metadata property
-            metadata={"search_id": search_id}
         )
+        register_agent(self, search_id)
 
 
     async def execute(self, resume: Dict, jobs: List[Dict]) -> List[Dict]:
         try:
+            search_id = get_search_id(self)
             tailored_applications = []
             
             for job in jobs:
@@ -107,7 +109,7 @@ class ResumeTailorAgent(Agent):
                 
                 # Log success for this job
                 await db_client.log_event(
-                    self.search_id,
+                    search_id,
                     "TAILOR",
                     "SUCCESS",
                     {"job_title": job["title"]}
@@ -116,8 +118,9 @@ class ResumeTailorAgent(Agent):
             return tailored_applications
             
         except Exception as e:
+            search_id = get_search_id(self)
             await db_client.log_event(
-                self.search_id,
+                search_id,
                 "TAILOR",
                 "ERROR",
                 {"error": str(e)}
@@ -126,19 +129,17 @@ class ResumeTailorAgent(Agent):
 
 class ApplicationAgent(Agent):
     def __init__(self, search_id: str):
-        self.search_id = search_id
         super().__init__(
             role='Application Submitter',
             goal='Submit job applications through Greenhouse',
             backstory='I am an AI agent specialized in automated job application submission',
             allow_delegation=False,
             verbose=True,
-            # Add search_id as a metadata property
-            metadata={"search_id": search_id}
         )
 
     async def execute(self, applications: List[Dict]) -> List[Dict]:
         try:
+            search_id = get_search_id(self)
             results = []
             
             for app in applications:
@@ -156,16 +157,17 @@ class ApplicationAgent(Agent):
                     
                     # Log success
                     await db_client.log_event(
-                        self.search_id,
+                        search_id,
                         "SUBMITTER",
                         "SUCCESS",
                         {"job_title": app["job"]["title"]}
                     )
                     
                 except Exception as e:
+                    search_id = get_search_id(self)
                     # Log individual application failure
                     await db_client.log_event(
-                        self.search_id,
+                        search_id,
                         "SUBMITTER",
                         "ERROR",
                         {
@@ -185,7 +187,7 @@ class ApplicationAgent(Agent):
             
         except Exception as e:
             await db_client.log_event(
-                self.search_id,
+                search_id,
                 "SUBMITTER",
                 "ERROR",
                 {"error": str(e)}

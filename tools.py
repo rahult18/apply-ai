@@ -22,15 +22,21 @@ class JobSearchTools:
     async def search_jobs(self, position: str, experience_level: str) -> List[Dict]:
         """Search for jobs using Serper"""
         query = f"site:job-boards.greenhouse.io {position} {experience_level}"
-        results = await self.serper_tool.search(query)
+        
+        # Pass search_query as a named parameter, not positional
+        results = self.serper_tool.run(search_query=query)
+        print("\n\nresults: ", results)
         
         jobs = []
-        for result in results:
+        # Extract the organic results array from the response
+        organic_results = results.get('organic', [])
+        
+        for result in organic_results:
             jobs.append({
                 "title": result.get("title"),
                 "link": result.get("link"),
-                "company": result.get("company", "Unknown"),
-                "posted_date": result.get("date")
+                "company": result.get("source", "Unknown"),  # 'source' is used instead of 'company' in the response
+                "posted_date": result.get("date", "Unknown")
             })
         return jobs
 
@@ -42,10 +48,10 @@ class JobSearchTools:
             await page.goto(url)
             
             # Wait for the job description to load
-            await page.wait_for_selector(".job-description", timeout=10000)
+            await page.wait_for_selector(".job__description.body", timeout=10000)
             
             # Extract the job description
-            description = await page.inner_text(".job-description")
+            description = await page.inner_text(".job__description.body")
             await browser.close()
             return description
 
