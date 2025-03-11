@@ -4,7 +4,7 @@ A sophisticated system that automates the job application process using AI agent
 
 ## Overview
 
-This project is an automated job application system that helps users find and apply for jobs. It leverages AI agents to search for relevant job postings, tailor resumes for each job, and (optionally) submit applications automatically.
+This project is an automated job application system that helps users find and apply for jobs. It leverages AI agents to search for relevant job postings, tailor resumes for each job, and submit applications automatically.
 
 The system follows this workflow:
 1. User submits job search criteria (position and experience level)
