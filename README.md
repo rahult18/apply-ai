@@ -26,7 +26,7 @@ The application is built with a modern tech stack:
   - Groq LLM API for resume tailoring
   - Playwright for web automation
 
-![Architecture Overview](https://raw.githubusercontent.com/rahult18/apply-ai/main/project_architecutre.png)
+![Architecture Overview](https://raw.githubusercontent.com/rahult18/apply-ai/main/project_architecture.png)
 
 ## System Flow
 
