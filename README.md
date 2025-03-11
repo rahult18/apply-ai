@@ -17,7 +17,7 @@ The system follows this workflow:
 The application is built with a modern tech stack:
 
 - **Backend**: Python FastAPI for RESTful API endpoints
-- **Frontend**: Next.js (not included in this repository)
+- **Frontend**: Next.js 
 - **Database**: Supabase for data persistence and real-time updates
 - **AI Agent Orchestration**: CrewAI for coordinating specialized AI agents
 - **Background Processing**: Celery with Redis for asynchronous task management
@@ -25,6 +25,8 @@ The application is built with a modern tech stack:
   - Serper API for job listings scraping
   - Groq LLM API for resume tailoring
   - Playwright for web automation
+
+![Architecture Overview](https://raw.githubusercontent.com/rahult18/apply-ai/main/project_architecutre.png)
 
 ## System Flow
 
@@ -37,6 +39,8 @@ The application is built with a modern tech stack:
    - Results are stored in the database
 4. Throughout the process, events are logged to the database
 5. The user can check the status at any time through the API
+
+![Architecture Overview](https://raw.githubusercontent.com/rahult18/apply-ai/main/bg_tasks.png)
 
 ## Concurrency and Performance Considerations
 
