@@ -16,14 +16,16 @@ class DatabaseClient:
         data = {
             "position": position,
             "experience_level": experience_level,
-            "status": "CREATED"
+            "status": "QUEUED" 
         }
         
         result = self.supabase.table("searches").insert(data).execute()
         return result.data[0]["search_id"]
 
     async def log_event(self, search_id: str, agent_type: str, event_type: str, details: Dict[str, Any]):
-        """Log an event for a specific search"""
+        """Log an event for a specific search with timestamp"""
+        details["timestamp"] = datetime.utcnow().isoformat()
+        
         event_data = {
             "search_id": search_id,
             "agent_type": agent_type,
@@ -45,6 +47,26 @@ class DatabaseClient:
         """Get the current status and events for a search"""
         search = self.supabase.table("search_status").select("*").eq("search_id", search_id).single().execute()
         return search.data
+    
+    async def get_latest_events(self, search_id: str, limit: int = 20) -> List[Dict]:
+        """Get the latest events for a search with a specified limit"""
+        events = self.supabase.table("events") \
+            .select("*") \
+            .eq("search_id", search_id) \
+            .order("created_at", desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        # Parse JSON details for each event
+        result = []
+        for event in events.data:
+            try:
+                event["details"] = json.loads(event["details"])
+            except:
+                pass
+            result.append(event)
+            
+        return result
     
     async def save_job(self, search_id: str, job_data: Dict) -> str:
         """Save a job to the jobs table and return the job_id"""

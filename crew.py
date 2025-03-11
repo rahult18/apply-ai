@@ -3,29 +3,32 @@ from agents import JobSearchAgent, ResumeTailorAgent, ApplicationAgent
 from db import db_client
 import json
 import asyncio
-from typing import Dict
+from typing import Dict, List
 
 class JobApplicationCrew:
     def __init__(self, search_id: str):
         self.search_id = search_id
         
-        # Initialize agents
+        # initialize agents
         self.searcher = JobSearchAgent(search_id)
         self.tailor = ResumeTailorAgent(search_id)
-        # Initialize but don't use the submitter
         self.submitter = ApplicationAgent(search_id)
         
-        # Create crew with just the searcher and tailor
+        # create crew with just the searcher and tailor
         self.crew = Crew(
-            agents=[self.searcher, self.tailor],  # Removed submitter from active agents
-            tasks=[],  # Tasks will be created dynamically
+            agents=[self.searcher, self.tailor], 
+            tasks=[],  # tasks will be created dynamically
             verbose=True
         )
 
 
     async def execute_search(self, position: str, experience_level: str, resume: Dict) -> Dict:
+        """Execute the job search with improved error handling for partial failures"""
+        # job results storage
+        jobs = []
+        applications = []
+        
         try:
-            # Log the start of the search process
             await db_client.log_event(
                 self.search_id,
                 "CREW",
@@ -37,7 +40,7 @@ class JobApplicationCrew:
                 }
             )
             
-            # Update search status to IN_PROGRESS
+            # update search status to IN_PROGRESS
             await db_client.update_search_status(self.search_id, "IN_PROGRESS")
             print("\n[DEBUG] updated search status to IN_PROGRESS")
             
@@ -49,51 +52,63 @@ class JobApplicationCrew:
                 {"message": "Starting job search phase"}
             )
             
-            jobs = await self.searcher.execute(position, experience_level)
-            
-            if not jobs:
+            try:
+                jobs = await self.searcher.execute(position, experience_level)
+                
+                if not jobs:
+                    await db_client.log_event(
+                        self.search_id,
+                        "CREW",
+                        "WARNING",
+                        {"message": "No jobs found"}
+                    )
+                    
+                    # Continue with the process, but log that no jobs were found
+                    print("\n[WARNING] No jobs found")
+                else:
+                    await db_client.log_event(
+                        self.search_id,
+                        "CREW",
+                        "SUCCESS",
+                        {"message": f"Found {len(jobs)} jobs"}
+                    )
+            except Exception as e:
                 await db_client.log_event(
                     self.search_id,
                     "CREW",
-                    "WARNING",
-                    {"message": "No jobs found"}
+                    "ERROR",
+                    {"message": f"Error during job search phase: {str(e)}"}
                 )
-                
-                await db_client.update_search_status(
-                    self.search_id, 
-                    "COMPLETED",
-                    {"message": "No jobs found"}
-                )
-                return {"status": "completed", "jobs_found": 0}
+                print(f"\n[ERROR] Job search failed: {str(e)}")
             
-            # Step 2: Tailor resumes
-            await db_client.log_event(
-                self.search_id,
-                "CREW",
-                "INFO",
-                {"message": "Starting resume tailoring phase"}
-            )
-            
-            applications = await self.tailor.execute(resume, jobs)
-            print("\n[DEBUG] applications tailored: ", len(applications))
-            
-            if not applications:
+            # Only proceed with tailoring if we have jobs
+            if jobs:
+                # Step 2: Tailor resumes
                 await db_client.log_event(
                     self.search_id,
                     "CREW",
-                    "WARNING",
-                    {"message": "Failed to create applications"}
+                    "INFO",
+                    {"message": "Starting resume tailoring phase"}
                 )
                 
-                await db_client.update_search_status(
-                    self.search_id,
-                    "COMPLETED",
-                    {
-                        "message": "Failed to create applications",
-                        "jobs_found": len(jobs)
-                    }
-                )
-                return {"status": "completed", "jobs_found": len(jobs), "applications_created": 0}
+                try:
+                    applications = await self.tailor.execute(resume, jobs)
+                    print("\n[DEBUG] applications tailored: ", len(applications))
+                    
+                    await db_client.log_event(
+                        self.search_id,
+                        "CREW", 
+                        "SUCCESS",
+                        {"message": f"Successfully tailored {len(applications)} resumes"}
+                    )
+                except Exception as e:
+                    await db_client.log_event(
+                        self.search_id,
+                        "CREW",
+                        "ERROR",
+                        {"message": f"Error during resume tailoring phase: {str(e)}"}
+                    )
+                    print(f"\n[ERROR] Resume tailoring failed: {str(e)}")
             
             # Log that we're skipping the application submission phase
             await db_client.log_event(
@@ -103,23 +118,23 @@ class JobApplicationCrew:
                 {"message": "Skipping application submission phase as requested"}
             )
             
-            # Query the jobs table to get the final status
+            # querying the jobs table to get the final status
             job_records = await db_client.get_jobs_for_search(self.search_id)
             
-            # Create results from the jobs table
+            # creating results from the jobs table
             application_summaries = []
             for job in job_records:
                 application_summaries.append({
-                    "job_id": job["job_id"],
-                    "job_title": job["title"],
-                    "company": job["company"],
-                    "link": job["link"],
+                    "job_id": job.get("job_id", "unknown"),
+                    "job_title": job.get("title", "Unknown Title"),
+                    "company": job.get("company", "Unknown Company"),
+                    "link": job.get("link", ""),
                     "posted_date": job.get("posted_date", "Unknown"),
-                    "resume_tailored": job["status"] == "resume_tailored",
-                    "status": job["status"]
+                    "resume_tailored": job.get("status") == "resume_tailored",
+                    "status": job.get("status", "unknown")
                 })
             
-            # Update final status
+            # update final status
             final_results = {
                 "jobs_found": len(jobs),
                 "applications_created": len(application_summaries),
@@ -127,18 +142,33 @@ class JobApplicationCrew:
                 "details": application_summaries
             }
             
-            await db_client.log_event(
-                self.search_id,
-                "CREW",
-                "SUCCESS",
-                {"message": "Job search and resume tailoring completed successfully"}
-            )
-            
-            await db_client.update_search_status(
-                self.search_id,
-                "COMPLETED",
-                final_results
-            )
+            # determine final status based on results
+            if len(jobs) > 0 and len(application_summaries) > 0:
+                await db_client.log_event(
+                    self.search_id,
+                    "CREW",
+                    "SUCCESS",
+                    {"message": "Job search and resume tailoring completed with some results"}
+                )
+                
+                await db_client.update_search_status(
+                    self.search_id,
+                    "COMPLETED",
+                    final_results
+                )
+            else:
+                await db_client.log_event(
+                    self.search_id,
+                    "CREW",
+                    "WARNING",
+                    {"message": "Job search completed but with limited results"}
+                )
+                
+                await db_client.update_search_status(
+                    self.search_id,
+                    "COMPLETED_WITH_WARNINGS",
+                    final_results
+                )
             
             return {
                 "status": "completed",
@@ -146,7 +176,6 @@ class JobApplicationCrew:
             }
             
         except Exception as e:
-            # Log error and update status
             await db_client.log_event(
                 self.search_id,
                 "CREW",
@@ -154,10 +183,47 @@ class JobApplicationCrew:
                 {"error": str(e)}
             )
             
-            await db_client.update_search_status(
-                self.search_id,
-                "ERROR",
-                {"error": str(e)}
-            )
+            # still try to get any job records that may exist
+            try:
+                job_records = await db_client.get_jobs_for_search(self.search_id)
+                
+                # creating partial results even in case of error
+                partial_results = {
+                    "jobs_found": len(jobs),
+                    "applications_created": len(applications),
+                    "error": str(e),
+                    "details": [
+                        {
+                            "job_id": job.get("job_id", "unknown"),
+                            "job_title": job.get("title", "Unknown Title"),
+                            "company": job.get("company", "Unknown Company"),
+                            "status": job.get("status", "unknown")
+                        } 
+                        for job in job_records
+                    ]
+                }
+                
+                await db_client.update_search_status(
+                    self.search_id,
+                    "ERROR",
+                    partial_results
+                )
+                
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    **partial_results
+                }
             
-            raise
+            except Exception as inner_e:
+                await db_client.update_search_status(
+                    self.search_id,
+                    "ERROR",
+                    {"error": str(e), "jobs_found": len(jobs)}
+                )
+                
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "jobs_found": len(jobs)
+                }

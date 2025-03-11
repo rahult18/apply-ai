@@ -1,177 +1,207 @@
-Objective: Develop an automated job application system using CrewAI that helps users apply for jobs in the US. The system will leverage various APIs and technologies for job scraping, resume tailoring, and application submission.
+# Apply AI: Automated Job Application System
 
-Tech Stack:
+A sophisticated system that automates the job application process using AI agents, built with CrewAI, FastAPI, Celery, and Supabase.
 
-- Backend: Python Fast API
+## Overview
 
-- Frontend: Next.js
+This project is an automated job application system that helps users find and apply for jobs. It leverages AI agents to search for relevant job postings, tailor resumes for each job, and (optionally) submit applications automatically.
 
-- Database: Supabase
+The system follows this workflow:
+1. User submits job search criteria (position and experience level)
+2. System searches for job postings on Greenhouse job boards
+3. For each relevant job found, the system tailors the user's resume to match the job requirements
+4. (Optional) The system can automatically submit applications
 
-- AI Agent Orchestration: Crew AI
+## Project Architecture
 
+The application is built with a modern tech stack:
 
-User Flow:
+- **Backend**: Python FastAPI for RESTful API endpoints
+- **Frontend**: Next.js (not included in this repository)
+- **Database**: Supabase for data persistence and real-time updates
+- **AI Agent Orchestration**: CrewAI for coordinating specialized AI agents
+- **Background Processing**: Celery with Redis for asynchronous task management
+- **External APIs**:
+  - Serper API for job listings scraping
+  - Groq LLM API for resume tailoring
+  - Playwright for web automation
 
-1. User Input:
+## System Flow
 
-   - The user enters the desired job title and selects their experience level (entry-level, mid-level, senior).
+1. When a user creates a search, it is initially set to "QUEUED" status
+2. A Celery task is created to process the search asynchronously
+3. The Celery worker picks up the task and runs the job search process:
+   - JobSearchAgent finds relevant job postings
+   - For each job, details and job descriptions are fetched
+   - ResumeTailorAgent customizes the resume for each job
+   - Results are stored in the database
+4. Throughout the process, events are logged to the database
+5. The user can check the status at any time through the API
 
-   - The user submits their personal information (education, projects, work experience, skills, summary) through a form which will be stored as user_resume.json in the project directory. After the user hits the POST `/api/search` endpoint kick off the crew.
+## Concurrency and Performance Considerations
 
-2. Job Listing Scraping:
+- **Async Operations**: FastAPI and asyncio enable efficient handling of multiple requests
+- **Background Processing**: Celery offloads intensive tasks from the web server
+- **Task Isolation**: Each search runs as a separate Celery task, ensuring isolation
+- **Parallel Job Processing**: Within a search, multiple jobs are processed concurrently using asyncio
+- **Error Resilience**: Failures in processing individual jobs don't affect the entire search process
 
-   - An AI agent will use the Serper API to scrape job listings specifically from the Greenhouse job board (job-boards.greenhouse.io). Use SerperDevTool to scrape the job listings `from crewai_tools import SerperDevTool`
+## System Components
 
-   - This is how you can scrape the job listings
-   ```python
-   self.serper_tool = SerperDevTool(
-        n_results=5, #only fetches the first 5 results in the search page
-        search_type="search"
-    )
+### Agents (agents.py)
+
+Three specialized AI agents built with CrewAI:
+
+1. **JobSearchAgent**: Searches for job postings using the Serper API
+2. **ResumeTailorAgent**: Tailors resumes to match job requirements using Groq LLM
+3. **ApplicationAgent**: Submits applications through web automation
+
+### Crew Orchestration (crew.py)
+
+The `JobApplicationCrew` class orchestrates the agents to:
+- Execute job searches
+- Manage the resume tailoring process
+- Handle error cases and partial failures
+- Track progress and results
+
+### Database Integration (db.py)
+
+`DatabaseClient` provides methods to:
+- Create and track searches
+- Log events during the search process
+- Store and update job information
+- Manage application records
+- Retrieve status and latest events
+
+### API Endpoints (main.py)
+
+FastAPI implementation with two main endpoints:
+- `POST /api/search`: Create a new job search
+- `GET /api/search/{search_id}`: Get the status and events for a search
+
+### Background Processing (celery_config.py, run_celery.py)
+
+#### Celery Implementation Details
+
+The system uses Celery to handle resource-intensive job search processes in the background:
+
+- **Task Definition**: The main Celery task `process_search_task` is defined in `celery_config.py`
+- **Worker Configuration**:
+  - Task timeout limit: 30 minutes
+  - Worker prefetch multiplier: 1 (one task per worker at a time)
+  - Task serialization: JSON
+  - Automatic task tracking enabled
+
+- **Error Handling**: The Celery task includes comprehensive error handling to:
+  - Log errors to the database
+  - Update search status appropriately
+  - Provide partial results when possible
+
+#### Redis as Message Broker and Result Backend
+
+Redis serves dual roles in this system:
+
+1. **Message Broker**: Queues the job search tasks for processing by Celery workers
+2. **Result Backend**: Stores task results temporarily for retrieval
+
+Redis connection details are configured through environment variables, defaulting to `redis://localhost:6379/0` for local development.
+
+### Tools and Utilities (tools.py)
+
+Specialized tools for the agents:
+- `search_jobs`: Uses Serper API to find job listings
+- `fetch_job_description`: Uses Playwright to extract job descriptions
+- `tailor_resume`: Uses Groq LLM to customize resumes
+
+### Agent Registry (registry.py)
+
+Simple in-memory registry to associate agent instances with search IDs, enabling proper event tracking.
+
+## Database Schema
+
+The Supabase database includes the following tables:
+
+1. **searches**: Tracks overall search processes
+2. **events**: Records detailed process events
+3. **jobs**: Stores information about discovered jobs
+4. **applications**: Tracks the application status for each job
+
+A view called **search_status** provides an aggregated view of searches with their events.
+
+## How to Run the System
+
+### Prerequisites
+
+- Python 3.8+
+- Redis server
+- Supabase account
+- API keys for Serper and Groq
+
+### Running the Services
+
+#### Start Redis
+```bash
+# Start Redis in the foreground
+redis-server
+
+# Verify Redis is running
+redis-cli ping  # Should return "PONG"
+```
+
+#### Start Celery Worker
+```bash
+# Run the Celery worker
+python run_celery.py
+```
+
+#### Start FastAPI Application
+```bash
+# Start the API server
+uvicorn main:app --reload
+```
+
+### Using the System
+
+1. Prepare a user resume in JSON format (see `user_resume.json` for the expected structure)
+2. Create a job search by sending a POST request to `/api/search` with:
+   ```json
+   {
+     "position": "software engineer",
+     "experience_level": "entry-level"
+   }
    ```
+3. Use the returned `search_id` to track the search status by sending GET requests to `/api/search/{search_id}`
 
-   - The agent will return details of the 5 job postings: job title, link, company name, and posting date. Meanwhile it will fetch the job description of these posting as background tasks in FastAPI
+## Monitoring and Debugging
 
-3. Resume Tailoring and Generation:
-
-   - After fetching the job postings, a second AI agent will initiate.
-
-   - From the extracted job description (JD) from each job link and it will tailor the user's resume using Groq's free LLM.
-
-   - The tailored resume will highlight relevant bullet points from the Work Experience, Projects, and Summary sections.
-
-   - The output will be an ATS-compatible resume in PDF format.
-
-4. Automated Job Application:
-
-   - Once the resume is generated, a final AI agent will use Playwright to autofill the job application fields with the tailored resume.
-
-Concurrency Handling:
-
-- Implement multithreading in Python to manage multiple job postings concurrently.
-
-- Each thread will handle fetching the JD, tailoring the resume, and submitting applications for each job posting.
-
-- Return a search_id to the user that corresponds to the job search they searched for, allowing them to track the overall job application process. 
-
-Database Structure:
-
-- Store user information and application status in Supabase for tracking and reference.
-Supabase Tables:
--- Enable UUID generation
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- Searches table to track overall search processes
-CREATE TABLE searches (
-    search_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    position VARCHAR(255) NOT NULL,
-    experience_level VARCHAR(50) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'CREATED',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    results JSONB DEFAULT '{}'::jsonb
-);
-
--- Events table for detailed tracking of the entire process
-CREATE TABLE events (
-    event_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    search_id UUID REFERENCES searches(search_id) ON DELETE CASCADE,
-    agent_type VARCHAR(50) NOT NULL,  -- 'SEARCHER', 'SCRAPER', 'TAILOR'
-    event_type VARCHAR(50) NOT NULL,  -- 'INFO', 'ERROR', 'SUCCESS'
-    details JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create index for faster event retrieval
-CREATE INDEX idx_events_search_id ON events(search_id);
-
--- Create trigger to update updated_at timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-CREATE TRIGGER update_searches_updated_at
-    BEFORE UPDATE ON searches
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
--- Add RLS policies
-ALTER TABLE searches ENABLE ROW LEVEL SECURITY;
-ALTER TABLE events ENABLE ROW LEVEL SECURITY;
-
--- Create policies (adjust according to your auth setup)
-CREATE POLICY "Enable read access for all users" ON searches
-    FOR SELECT
-    USING (true);
-
-CREATE POLICY "Enable read access for all users" ON events
-    FOR SELECT
-    USING (true);
-
--- Create table called jobs
-CREATE TABLE jobs (
-    job_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    search_id UUID REFERENCES searches(search_id),
-    title VARCHAR(255) NOT NULL,
-    company VARCHAR(255) NOT NULL,
-    link TEXT NOT NULL,
-    posted_date VARCHAR(100),
-    description TEXT,
-    tailored_resume JSONB,
-    status VARCHAR(50) DEFAULT 'discovered',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create table called applications
-CREATE TABLE applications (
-    application_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    job_id UUID REFERENCES jobs(job_id),
-    search_id UUID REFERENCES searches(search_id),
-    status VARCHAR(50) NOT NULL, -- 'tailored', 'submitted', 'failed'
-    tailored_resume JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Optional: Create a view for easier querying of search status with events
-CREATE VIEW search_status AS
-SELECT 
-    s.search_id,
-    s.position,
-    s.experience_level,
-    s.status,
-    s.created_at,
-    s.updated_at,
-    COUNT(e.event_id) as event_count,
-    jsonb_agg(e.details ORDER BY e.created_at) as event_history
-FROM searches s
-LEFT JOIN events e ON s.search_id = e.search_id
-GROUP BY s.search_id, s.position, s.experience_level, s.status, s.created_at, s.updated_at;
+The system includes extensive logging throughout the process. All events are stored in the `events` table in Supabase with details including:
+- Agent type (SEARCHER, TAILOR, etc.)
+- Event type (INFO, SUCCESS, ERROR, etc.)
+- Timestamp
+- Detailed information specific to the event
 
 
-Output Requirements:
+## Sample API Responses
 
-- Ensure that the system efficiently processes user inputs, manages multi-threading for concurrent job applications, and provides real-time updates to the user regarding their application status.
+1. POST `/api/search`
+```json
+{
+    "search_id": "ff531f74-0d84-435c-a959-4d107eb87421",
+    "status": "queued"
+}
+```
 
-Expected File directory structure:
-job_search_system/
-├── .env                # Environment variables (API keys)
-├── user_resume.json    # User resume details in JSON
-├── main.py        # FastAPI app + endpoints (minimal) 
-├── agents.py      # All agents (Searcher, Scraper, Tailor)
-├── tools.py       # Shared tools (Serper, Playwright, Groq)
-├── crew.py        # CrewAI coordination
-└── db.py          # Supabase client
-└── registry.py    # in-memory db to store the search_id against the agent instances
-
-Endpoints
-1. POST /api/search
-Request Body: Position and Experience Level
-Response: search_id (uuid)
-
-2. GET /api/search/<search_id>
-Response: events related to that search_id
+2. GET `api/search/search_id`
+```json
+{
+    "search_id": "ff531f74-0d84-435c-a959-4d107eb87421",
+    "position": "software engineer",
+    "experience_level": "Mid Level",
+    "status": "COMPLETED",
+    "created_at": "2025-03-11T22:54:32.204669+00:00",
+    "updated_at": "2025-03-11T22:55:54.845406+00:00",
+    "event_count": 37,
+    "event_history": [..],
+    "latest_events": [..]
+}
+```

@@ -1,10 +1,10 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Optional
 import json
 import os
 from db import db_client
-from crew import JobApplicationCrew
+from celery_config import process_search_task
 
 app = FastAPI()
 
@@ -12,51 +12,57 @@ class SearchRequest(BaseModel):
     position: str
     experience_level: str
 
-async def process_search(search_id: str, position: str, experience_level: str):
-    try:
-        # Load user resume
-        with open("user_resume.json", "r") as f:
-            resume = json.load(f)
-        
-        # Create and execute crew
-        crew = JobApplicationCrew(search_id)
-        await crew.execute_search(position, experience_level, resume)
-        
-    except Exception as e:
-        # Error handling is done within the crew
-        print(f"Error processing search {search_id}: {str(e)}")
-
 @app.post("/api/search")
-async def create_search(request: SearchRequest, background_tasks: BackgroundTasks):
+async def create_search(request: SearchRequest):
     try:
-        # Create search record
+        # create search record
         search_id = await db_client.create_search(
             request.position,
             request.experience_level
         )
         
-        # Start background processing
-        background_tasks.add_task(
-            process_search,
+        await db_client.log_event(
+            search_id,
+            "API",
+            "INFO",
+            {"message": "Search request received and queued for processing"}
+        )
+        
+        # queue the Celery task - async
+        process_search_task.delay(
             search_id,
             request.position,
             request.experience_level
         )
         
-        return {"search_id": search_id}
+        return {"search_id": search_id, "status": "queued"}
         
     except Exception as e:
+        print(f"Error creating search: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/search/{search_id}")
 async def get_search_status(search_id: str):
     try:
+        # get the search status from the database
         status = await db_client.get_search_status(search_id)
+        
         if not status:
             raise HTTPException(status_code=404, detail="Search not found")
-        return status
+            
+        # get the latest events
+        events = await db_client.get_latest_events(search_id, limit=20)
         
+        # add events to the response
+        response = status.copy()
+        response["latest_events"] = events
+        
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"Error retrieving search status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

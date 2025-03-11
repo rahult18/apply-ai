@@ -5,6 +5,7 @@ import os
 import json
 from typing import Dict, List
 import asyncio
+import time
 
 class JobSearchTools:
     def __init__(self):
@@ -19,75 +20,93 @@ class JobSearchTools:
         )
 
     async def search_jobs(self, position: str, experience_level: str) -> List[Dict]:
-        """Search for jobs using Serper"""
+        """Search for jobs using Serper with improved error handling"""
         query = f"site:job-boards.greenhouse.io {position} {experience_level}"
         
-        # Pass search_query as a named parameter, not positional
-        results = self.serper_tool.run(search_query=query)
-        
-        jobs = []
-        # Extract the organic results array from the response
-        organic_results = results.get('organic', [])
-        
-        for result in organic_results:
-            jobs.append({
-                "title": result.get("title"),
-                "link": result.get("link"),
-                "company": result.get("source", "Unknown"),  # 'source' is used instead of 'company' in the response
-                "posted_date": result.get("date", "Unknown")
-            })
-        return jobs
+        try:
+            results = self.serper_tool.run(search_query=query)
+            
+            jobs = []
+            # extract the organic results array from the response
+            organic_results = results.get('organic', [])
+            
+            for result in organic_results:
+                jobs.append({
+                    "title": result.get("title", "Unknown Position"),
+                    "link": result.get("link", ""),
+                    "company": result.get("source", "Unknown"), 
+                    "posted_date": result.get("date", "Unknown")
+                })
+            
+            if not jobs:
+                print("Warning: No jobs found in search results")
+                
+            return jobs
+        except Exception as e:
+            print(f"Error in search_jobs: {str(e)}")
+            return []
 
     async def fetch_job_description(self, url: str) -> str:
-        """Fetch job description using Playwright"""
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
-            page = await browser.new_page()
-            
-            try:
-                await page.goto(url, timeout=30000)  # Increased timeout for page load
-                
-                # Wait for either of the common selectors for job descriptions
-                selector_found = False
-                possible_selectors = [
-                    ".job__description.body", 
-                    ".job-description",
-                ]
-                
-                for selector in possible_selectors:
-                    try:
-                        await page.wait_for_selector(selector, timeout=5000)
-                        description = await page.inner_text(selector)
-                        selector_found = True
-                        break
-                    except:
-                        continue
-                
-                if not selector_found:
-                    # If no specific selector works, get the whole page content
-                    description = await page.content()
-                    # Extract text from HTML content (simplified approach)
-                    description = description.replace("<", " <").replace(">", "> ")
+        """Fetch job description using Playwright with improved error handling and timeout"""
+        # Add a timeout for the entire operation
+        try:
+            async with asyncio.timeout(60):  # 60 second timeout for the entire operation
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch()
+                    page = await browser.new_page()
                     
-                return description
-            except Exception as e:
-                print(f"Error fetching job description: {str(e)}")
-                return f"Failed to fetch job description: {str(e)}"
-            finally:
-                await browser.close()
+                    try:
+                        await page.goto(url, timeout=20000)  # 20 second timeout for page load
+                        
+                        # wait for either of the common selectors for job descriptions
+                        selector_found = False
+                        possible_selectors = [
+                            ".job__description.body", 
+                            ".job-description",
+                        ]
+                        
+                        for selector in possible_selectors:
+                            try:
+                                await page.wait_for_selector(selector, timeout=5000)
+                                description = await page.inner_text(selector)
+                                selector_found = True
+                                break
+                            except:
+                                continue
+                        
+                        if not selector_found:
+                            # if no specific selector works, get the whole page content
+                            description = await page.content()
+                            # extract text from HTML content
+                            description = description.replace("<", " <").replace(">", "> ")
+                            
+                        return description
+                    except Exception as e:
+                        print(f"Error fetching job description: {str(e)}")
+                        return f"Failed to fetch job description: {str(e)}"
+                    finally:
+                        await browser.close()
+        except asyncio.TimeoutError:
+            return "Timeout: Failed to fetch job description within the allowed time."
+        except Exception as e:
+            print(f"Unexpected error in fetch_job_description: {str(e)}")
+            return f"Error: {str(e)}"
 
     async def tailor_resume(self, resume: Dict, job_description: str) -> Dict:
-        """Tailor resume using Groq LLM, processing in chunks to avoid token limits"""
+        """Tailor resume using Groq LLM with robust error handling and timeouts"""
+        # start with a copy of the original resume that we can modify
+        tailored_resume = resume.copy()
+        
         try:
-            # Create a compact version of the resume with only summary, work experience, and projects
+            # create a compact version of the resume with only summary, work experience, and projects
             compact_resume = {
                 "summary": resume.get("summary", ""),
                 "workExperience": resume.get("workExperience", []),
                 "projects": resume.get("projects", [])
             }
             
-            # Extract key information from job description to reduce tokens
-            # Keep only the first 1000 characters of the job description to reduce token count
+            # extract key information from job description to reduce tokens
+            # keeping only the first 1000 characters of the job description to reduce token count
             job_description_summary = job_description[:1000] + "..." if len(job_description) > 1000 else job_description
             
             prompt = f"""
@@ -106,33 +125,49 @@ class JobSearchTools:
             Return the modified parts in the same JSON structure, modifying ONLY the summary, workExperience, and projects sections.
             """
             
-            # Call the Groq API with the reduced content
-            response = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="mixtral-8x7b-32768",
-                temperature=0.7,
+            # set timeout for API call
+            start_time = time.time()
+            timeout = 30  # 30 seconds timeout
+            
+            # calling the Groq API with the reduced content and a timeout
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.groq_client.chat.completions.create,
+                    messages=[{"role": "user", "content": prompt}],
+                    model="mixtral-8x7b-32768",
+                    temperature=0.7,
+                ),
+                timeout=timeout
             )
             
-            tailored_content = json.loads(response.choices[0].message.content)
+            # successfully got a response, parse it
+            content = response.choices[0].message.content
             
-            # Merge tailored content with original resume
-            tailored_resume = resume.copy()
-            if "summary" in tailored_content:
-                tailored_resume["summary"] = tailored_content["summary"]
-            if "workExperience" in tailored_content:
-                tailored_resume["workExperience"] = tailored_content["workExperience"]
-            if "projects" in tailored_content:
-                tailored_resume["projects"] = tailored_content["projects"]
-            
+            try:
+                tailored_content = json.loads(content)
+                
+                # merge tailored content with original resume
+                if "summary" in tailored_content:
+                    tailored_resume["summary"] = tailored_content["summary"]
+                if "workExperience" in tailored_content:
+                    tailored_resume["workExperience"] = tailored_content["workExperience"]
+                if "projects" in tailored_content:
+                    tailored_resume["projects"] = tailored_content["projects"]
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON from Groq API: {str(e)}")
+                print(f"Raw content: {content[:200]}...") 
+                tailored_resume["summary"] = f"NOTE: An error occurred while tailoring this resume. Original resume used. Error: {str(e)}"
+                
             return tailored_resume
-        except json.JSONDecodeError as e:
-            print(f"Error parsing JSON from Groq API: {str(e)}")
-            # In case of JSON parsing error, still return something useful
-            return resume
+            
+        except asyncio.TimeoutError:
+            print(f"Groq API timed out after {timeout} seconds")
+            tailored_resume["summary"] = f"NOTE: The resume tailoring service timed out. Original resume used."
+            return tailored_resume
         except Exception as e:
             print(f"Error with Groq API: {str(e)}")
-            # Return the original resume if there's an API error
-            return resume
+            tailored_resume["summary"] = f"NOTE: {resume.get('summary', '')} (An error occurred during tailoring: {str(e)})"
+            return tailored_resume
 
 
 # Create a singleton instance

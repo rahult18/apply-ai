@@ -17,16 +17,15 @@ class JobSearchAgent(Agent):
             verbose=True,
         )
 
-        # Register the agent with the search_id
+        # register the agent with the search_id
         register_agent(self, search_id)
 
     async def execute(self, position: str, experience_level: str) -> List[Dict]:
         try:
-            # Get the search_id from the registry
+            # get the search_id from the registry
             search_id = get_search_id(self)
             print(f"\n[DEBUG] starting search for jobs with search_id: {search_id}")
             
-            # Log search initiation
             await db_client.log_event(
                 search_id,
                 "SEARCHER",
@@ -36,7 +35,6 @@ class JobSearchAgent(Agent):
             
             jobs = await tools.search_jobs(position, experience_level)
             
-            # Log success event with more details
             await db_client.log_event(
                 search_id,
                 "SEARCHER",
@@ -48,13 +46,13 @@ class JobSearchAgent(Agent):
                 }
             )
             
-            # Start background tasks to fetch job descriptions
+            # start background tasks to fetch job descriptions
             tasks = []
             for job in jobs:
                 task = asyncio.create_task(self._fetch_job_details(job))
                 tasks.append(task)
             
-            # Wait for all job descriptions to be fetched
+            # wait for all job descriptions to be fetched
             detailed_jobs = await asyncio.gather(*tasks)
             return detailed_jobs
             
@@ -73,7 +71,6 @@ class JobSearchAgent(Agent):
         try:
             search_id = get_search_id(self)
             
-            # Log that we're fetching the job description
             await db_client.log_event(
                 search_id,
                 "SEARCHER",
@@ -84,7 +81,7 @@ class JobSearchAgent(Agent):
                 }
             )
             
-            # Save the job to the database first to get a job_id
+            # saving the job to the DB first to get a job_id
             job_data = {
                 "title": job["title"],
                 "company": job["company"],
@@ -93,19 +90,18 @@ class JobSearchAgent(Agent):
                 "status": "fetching_description"
             }
             job_id = await db_client.save_job(search_id, job_data)
-            job["job_id"] = job_id  # Add job_id to the job dict for reference
+            job["job_id"] = job_id  
             
-            # Fetch the job description
+            # fetch the job description
             description = await tools.fetch_job_description(job["link"])
             job["description"] = description
             
-            # Update the job record with the description
+            # update the job record with the description
             await db_client.update_job(job_id, {
                 "description": description,
                 "status": "description_fetched"
             })
             
-            # Log the job description as an event (truncated for readability)
             description_preview = description[:500] + "..." if len(description) > 500 else description
             await db_client.log_event(
                 search_id,
@@ -120,7 +116,7 @@ class JobSearchAgent(Agent):
                 }
             )
             
-            # Create an application record to track this job
+            # creating an application record to track this job
             application_id = await db_client.create_application(job_id, search_id, "description_fetched")
             job["application_id"] = application_id  # Add application_id to the job dict
             
@@ -133,7 +129,7 @@ class JobSearchAgent(Agent):
                 "ERROR",
                 {"error": f"Failed to fetch job details: {str(e)}", "job": job}
             )
-            # Even if we fail to get the description, return the job with an empty description
+            # return the job with an empty description if not there
             job["description"] = "Unable to fetch job description."
             if "job_id" in job:
                 await db_client.update_job(job["job_id"], {
@@ -160,7 +156,6 @@ class ResumeTailorAgent(Agent):
                 print("[WARNING] No search_id found for ResumeTailorAgent. Using fallback.")
                 search_id = "unknown_search"
             
-            # Log the start of resume tailoring
             await db_client.log_event(
                 search_id,
                 "TAILOR",
@@ -172,7 +167,7 @@ class ResumeTailorAgent(Agent):
             
             for job in jobs:
                 try:
-                    # Skip if no description was fetched or it's empty
+                    # skip if no description was fetched or it's empty
                     if "description" not in job or not job["description"]:
                         await db_client.log_event(
                             search_id,
@@ -182,7 +177,7 @@ class ResumeTailorAgent(Agent):
                         )
                         continue
                     
-                    # Get job_id from the job dictionary (should be added by JobSearchAgent)
+                    # get job_id from the job dictionary
                     job_id = job.get("job_id")
                     application_id = job.get("application_id")
                     
@@ -195,7 +190,6 @@ class ResumeTailorAgent(Agent):
                         )
                         continue
                     
-                    # Log that we're tailoring the resume for this job
                     await db_client.log_event(
                         search_id,
                         "TAILOR",
@@ -206,19 +200,19 @@ class ResumeTailorAgent(Agent):
                         }
                     )
                         
-                    # Update job status
+                    # update job status
                     await db_client.update_job(job_id, {"status": "tailoring_resume"})
                     
-                    # Tailor resume for this specific job
+                    # tailor resume for this specific job
                     tailored_resume = await tools.tailor_resume(resume, job["description"])
                     
-                    # Update job with tailored resume
+                    # update job with tailored resume
                     await db_client.update_job(job_id, {
                         "tailored_resume": json.dumps(tailored_resume),
                         "status": "resume_tailored"
                     })
                     
-                    # If we have an application_id, update it
+                    # if we have an application_id, update it
                     if application_id:
                         await db_client.update_application_status(
                             application_id, 
@@ -233,28 +227,23 @@ class ResumeTailorAgent(Agent):
                     
                     tailored_applications.append(application)
                     
-                    # Log the tailored resume details
                     resume_summary = {
                         "personalInfo": tailored_resume.get("personalInfo", {}),
                         "summary": tailored_resume.get("summary", ""),
                         "skills": tailored_resume.get("skills", {}),
-                        # Include only the titles and companies from work experience
                         "workExperience": [
                             {
                                 "title": exp.get("title", ""),
                                 "company": exp.get("company", ""),
-                                # Include a preview of responsibilities
                                 "responsibilities_preview": [r[:100] + "..." if len(r) > 100 else r 
                                                         for r in exp.get("responsibilities", [])[:2]]
                             } 
                             for exp in tailored_resume.get("workExperience", [])[:2]
                         ],
                         "education": tailored_resume.get("education", []),
-                        # Include only names of projects
                         "projects": [{"name": p.get("name", "")} for p in tailored_resume.get("projects", [])]
                     }
                     
-                    # Log tailored resume as an event
                     await db_client.log_event(
                         search_id,
                         "TAILOR",
@@ -267,7 +256,6 @@ class ResumeTailorAgent(Agent):
                         }
                     )
                     
-                    # Log success for this job
                     await db_client.log_event(
                         search_id,
                         "TAILOR",
@@ -280,7 +268,7 @@ class ResumeTailorAgent(Agent):
                         }
                     )
                 except Exception as e:
-                    # Log individual tailoring failure but continue with other jobs
+                    # log individual tailoring failure but continue with other jobs
                     job_id = job.get("job_id")
                     if job_id:
                         await db_client.update_job(job_id, {"status": "tailoring_failed"})
@@ -313,7 +301,6 @@ class ApplicationAgent(Agent):
             allow_delegation=False,
             verbose=True,
         )
-        # Don't forget to register this agent too
         register_agent(self, search_id)
 
     async def execute(self, applications: List[Dict]) -> List[Dict]:
@@ -328,8 +315,6 @@ class ApplicationAgent(Agent):
             for app in applications:
                 try:
                     # Submit the application using Playwright
-                    # This is a placeholder - actual implementation would depend on
-                    # Greenhouse's application form structure
                     result = {
                         "job": app["job"],
                         "status": "submitted",
