@@ -166,6 +166,7 @@ job_search_system/
 ├── tools.py       # Shared tools (Serper, Playwright, Groq)
 ├── crew.py        # CrewAI coordination
 └── db.py          # Supabase client
+└── registry.py    # in-memory db to store the search_id against the agent instances
 
 Endpoints
 1. POST /api/search
