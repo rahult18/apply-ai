@@ -113,6 +113,30 @@ CREATE POLICY "Enable read access for all users" ON events
     FOR SELECT
     USING (true);
 
+-- Create table called jobs
+CREATE TABLE jobs (
+    job_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    search_id UUID REFERENCES searches(search_id),
+    title VARCHAR(255) NOT NULL,
+    company VARCHAR(255) NOT NULL,
+    link TEXT NOT NULL,
+    posted_date VARCHAR(100),
+    description TEXT,
+    tailored_resume JSONB,
+    status VARCHAR(50) DEFAULT 'discovered',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create table called applications
+CREATE TABLE applications (
+    application_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    job_id UUID REFERENCES jobs(job_id),
+    search_id UUID REFERENCES searches(search_id),
+    status VARCHAR(50) NOT NULL, -- 'tailored', 'submitted', 'failed'
+    tailored_resume JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Optional: Create a view for easier querying of search status with events
 CREATE VIEW search_status AS
 SELECT 

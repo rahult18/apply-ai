@@ -1,6 +1,6 @@
 from supabase import create_client
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 import json
 from datetime import datetime
 
@@ -45,6 +45,42 @@ class DatabaseClient:
         """Get the current status and events for a search"""
         search = self.supabase.table("search_status").select("*").eq("search_id", search_id).single().execute()
         return search.data
+    
+    async def save_job(self, search_id: str, job_data: Dict) -> str:
+        """Save a job to the jobs table and return the job_id"""
+        job_data["search_id"] = search_id
+        result = self.supabase.table("jobs").insert(job_data).execute()
+        return result.data[0]["job_id"]
+
+    async def update_job(self, job_id: str, data: Dict):
+        """Update job data"""
+        self.supabase.table("jobs").update(data).eq("job_id", job_id).execute()
+
+    async def create_application(self, job_id: str, search_id: str, status: str, tailored_resume: Dict = None) -> str:
+        """Create a new application record"""
+        data = {
+            "job_id": job_id,
+            "search_id": search_id,
+            "status": status
+        }
+        if tailored_resume:
+            data["tailored_resume"] = json.dumps(tailored_resume)
+        
+        result = self.supabase.table("applications").insert(data).execute()
+        return result.data[0]["application_id"]
+
+    async def update_application_status(self, application_id: str, status: str, tailored_resume: Dict = None):
+        """Update application status and optional tailored resume"""
+        data = {"status": status}
+        if tailored_resume:
+            data["tailored_resume"] = json.dumps(tailored_resume)
+        
+        self.supabase.table("applications").update(data).eq("application_id", application_id).execute()
+
+    async def get_jobs_for_search(self, search_id: str) -> List[Dict]:
+        """Get all jobs for a specific search"""
+        result = self.supabase.table("jobs").select("*").eq("search_id", search_id).execute()
+        return result.data
 
 # Create a singleton instance
 db_client = DatabaseClient()
