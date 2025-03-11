@@ -10,7 +10,7 @@ The system follows this workflow:
 1. User submits job search criteria (position and experience level)
 2. System searches for job postings on Greenhouse job boards
 3. For each relevant job found, the system tailors the user's resume to match the job requirements
-4. (Optional) The system can automatically submit applications
+4. The system can automatically submit applications
 
 ## Project Architecture
 
