@@ -10,3 +10,4 @@ class JD(BaseModel):
 class RequestBody(BaseModel):
     email: str
     password: str
+

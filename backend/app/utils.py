@@ -1,8 +1,8 @@
 import logging
 import re
 import html
-from llm import LLM
-from models import JD
+from app.services.llm import LLM
+from app.models import JD
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +64,4 @@ def clean_content(content: str) -> str:
     
     logger.info(f"Cleaned content length: {len(cleaned)} chars (original: {len(content)} chars)")
     return cleaned
+
