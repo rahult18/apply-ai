@@ -2,14 +2,7 @@ import logging
 import re
 import html
 from llm import LLM
-from pydantic import BaseModel
-
-class JD(BaseModel):
-    job_title: str
-    company: str
-    job_posted: str
-    job_description: str
-    open_to_visa_sponsorship: bool
+from models import JD
 
 logger = logging.getLogger(__name__)
 

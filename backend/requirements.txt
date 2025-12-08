@@ -6,3 +6,4 @@ aiohttp
 google-genai
 dotenv
 pydantic
+supabase
