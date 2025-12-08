@@ -6,22 +6,29 @@ from app.models import JD
 
 logger = logging.getLogger(__name__)
 
-def extract_jd(content: str, llm: LLM) -> JD:
+def extract_jd(content: str, llm: LLM, url: str = None) -> JD:
     logger.info(f"Extracting JD from the given content: {len(content)} chars")
+    url_context = f"\n    Job Posting URL: {url}\n" if url else ""
     prompt = f"""
     You are an expert job description scraper. Below attached is the raw HTML content of a job posting link, now I need you to synthesize the raw content and give me a structured JSON output without any extra text and codefences. 
-
+    {url_context}
     Raw HTML Content:
     {content}
 
     Expected JSON Output:
     ```json
     {{
-        "job_title": Title of the job,
-        "company": Title of the company,
-        "job_posted": Date of the job posting,
-        "job_description": Job Description of the given job posting,
-        "open_to_visa_sponsorship": true/false - check if the company is open to US Work visa sponsorship
+        "job_title": Title of the job, return as a string,
+        "company": Title of the company, return as a string,
+        "job_posted": Date of the job posting, return as a string,
+        "job_description": Job Description of the given job posting, return as a string,
+        "required_skills": List of required skills for the job, return as a list of strings,
+        "preferred_skills": List of preferred skills for the job, return as a list of strings,
+        "education_requirements": List of education requirements for the job, return as a list of strings,
+        "experience_requirements": List of experience requirements for the job, return as a list of strings,
+        "keywords": List of keywords for the job, return as a list of strings,
+        "job_site_type": Type of the job posting source/platform - determine from the URL or content, must be one of: "linkedin", "job-board" (for platforms like greenhouse, askbyhq), "y-combinator", or "careers page" (company's own careers page), return as a string,
+        "open_to_visa_sponsorship": true/false - check if the company is open to US Work visa sponsorship, return as a boolean
     }}
     ```
     """

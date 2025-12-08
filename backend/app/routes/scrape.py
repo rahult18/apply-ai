@@ -22,9 +22,13 @@ async def scrape_job_description(job_link: str = Query(..., description="URL of 
                     raise HTTPException(status_code=response.status, detail=f"Failed to fetch content from the URL: {response.status}")
                 content = await response.text()
                 cleaned_content = clean_content(content)
-                jd = extract_jd(cleaned_content, llm)
+                jd = extract_jd(cleaned_content, llm, job_link)
                 logger.info(f"Successfully fetched the content from the URL!")
-                return {"url": job_link, "job_title": jd.job_title, "company": jd.company, "job_posted": jd.job_posted, "job_description": jd.job_description, "status_code": response.status}
+                return {
+                    "url": job_link,
+                    **jd.model_dump(),
+                    "status_code": response.status
+                }
     except aiohttp.ClientError as e:
         logger.info(f"Invalid job_link URL provided")
         raise HTTPException(status_code=400, detail=f"Error fetching URL: {str(e)}")
