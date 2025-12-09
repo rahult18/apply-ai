@@ -28,11 +28,11 @@ app.add_middleware(
 )
 
 # Include routers
-from app.routes import auth, scrape
+from app.routes import auth, scrape, db
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(scrape.router, tags=["scrape"])
-
+app.include_router(db.router, prefix="/db", tags=["db"])
 # Health check endpoint
 @app.get("/")
 def health_check():

@@ -15,6 +15,11 @@ def signup(body: RequestBody):
         if data.user is None:
             raise HTTPException(status_code=400, detail="Signup failed")
         
+        #insert row into DB: public.users table
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute("INSERT INTO users (id, email) VALUES (%s, %s)", (data.user.id, data.user.email))
+            supabase.db_connection.commit()
+
         # If session is None, email confirmation is required
         if data.session is None:
             return {
