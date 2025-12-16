@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS public.job_applications (
     job_posted TEXT, 
     job_description TEXT,
     url TEXT NOT NULL,
+    normalized_url TEXT NOT NULL,
     required_skills TEXT[] DEFAULT '{}',
     preferred_skills TEXT[] DEFAULT '{}',
     education_requirements TEXT[] DEFAULT '{}',
@@ -31,6 +32,6 @@ CREATE TABLE IF NOT EXISTS public.job_applications (
     application_date DATE DEFAULT CURRENT_DATE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, url)
+    UNIQUE(user_id, normalized_url)
 );
 

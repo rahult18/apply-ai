@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Header
 import aiohttp
 import logging
-from app.utils import extract_jd, clean_content
+from app.utils import extract_jd, clean_content, normalize_url
 from app.services.llm import LLM
 from app.services.supabase import Supabase
 
@@ -44,11 +44,14 @@ async def scrape_job_description(
                 
                 user_id = user_response.user.id
 
+                # Normalize URL to prevent duplicates from tracking params, trailing slashes, etc.
+                normalized_url = normalize_url(job_link)
+
                 # write the JD to DB: public.job_applications table
                 with supabase.db_connection.cursor() as cursor:
                     cursor.execute(
-                        "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, job_link, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, jd.job_site_type, jd.open_to_visa_sponsorship)
+                        "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, jd.job_site_type, jd.open_to_visa_sponsorship)
                     )
                     supabase.db_connection.commit()
                 logger.info(f"Successfully wrote to the DB!")

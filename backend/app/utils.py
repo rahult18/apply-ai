@@ -1,6 +1,7 @@
 import logging
 import re
 import html
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from app.services.llm import LLM
 from app.models import JD
 
@@ -71,4 +72,63 @@ def clean_content(content: str) -> str:
     
     logger.info(f"Cleaned content length: {len(cleaned)} chars (original: {len(content)} chars)")
     return cleaned
+
+
+def normalize_url(url: str) -> str:
+    """
+    Normalize a URL by:
+    - Removing tracking parameters (utm_*, gh_src, source, ref, etc.)
+    - Normalizing trailing slashes
+    - Removing fragments
+    - Lowercasing the scheme and netloc
+    - Sorting query parameters
+    
+    This helps prevent duplicate entries from URLs that differ only by tracking params.
+    """
+    try:
+        parsed = urlparse(url)
+        
+        # Normalize scheme and netloc (lowercase)
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+        
+        # Remove fragment
+        fragment = ""
+        
+        # Normalize path (remove trailing slash unless it's root)
+        path = parsed.path.rstrip('/') or '/'
+        
+        # Filter out tracking parameters from query string
+        tracking_params = {
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+            'utm_id', 'utm_source_platform', 'utm_creative_format',
+            'gh_src', 'source', 'ref', 'referrer', 'referer',
+            'fbclid', 'gclid', 'msclkid', 'twclid',
+            'li_fat_id', 'trackingId', 'trk', 'trkInfo',
+            '_ga', '_gid', 'mc_cid', 'mc_eid',
+            'icid', 'ncid', 'ncid', 'ncid',
+            'campaign_id', 'ad_id', 'adgroup_id'
+        }
+        
+        if parsed.query:
+            query_params = parse_qs(parsed.query, keep_blank_values=False)
+            # Remove tracking parameters
+            filtered_params = {
+                k: v for k, v in query_params.items() 
+                if k.lower() not in tracking_params
+            }
+            # Sort parameters for consistency
+            query = urlencode(sorted(filtered_params.items()), doseq=True)
+        else:
+            query = ""
+        
+        # Reconstruct URL
+        normalized = urlunparse((scheme, netloc, path, parsed.params, query, fragment))
+        
+        logger.debug(f"Normalized URL: {url} -> {normalized}")
+        return normalized
+        
+    except Exception as e:
+        logger.warning(f"Failed to normalize URL {url}: {str(e)}, returning original")
+        return url
 

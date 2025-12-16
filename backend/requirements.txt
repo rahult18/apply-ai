@@ -8,3 +8,4 @@ dotenv
 pydantic
 supabase
 psycopg2-binary
+python-multipart
