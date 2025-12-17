@@ -164,8 +164,9 @@ async def update_profile(
                     file=file_contents,
                     path=file_path,
                     file_options={
+                        "content-type": resume.content_type or "application/pdf",
                         "cache-control": "3600",
-                        "upsert": "false"
+                        "upsert": "true"
                     }
                 )
                 
@@ -285,7 +286,7 @@ async def update_profile(
             # Rollback: delete uploaded file if DB update fails
             if uploaded_file_path:
                 try:
-                    supabase.client.storage.from_("user_documents").remove([uploaded_file_path])
+                    supabase.client.storage.from_("user-documents").remove([uploaded_file_path])
                 except Exception as delete_error:
                     logger.error(f"Failed to delete uploaded file after DB error: {str(delete_error)}")
             logger.error(f"Database update error: {str(db_error)}")
