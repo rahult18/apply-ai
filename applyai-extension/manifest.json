@@ -1,0 +1,10 @@
+{
+    "manifest_version": 3,
+    "name": "ApplyAI",
+    "version": "0.1.0",
+    "description": "Connect ApplyAI to your account.",
+    "action": {
+        "default_title": "ApplyAI",
+        "default_popup": "popup/popup.html"
+    }
+}
