@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException, Header
 from app.models import RequestBody
 from app.services.supabase import Supabase
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Initialize Supabase client
 supabase = Supabase()
@@ -42,8 +45,6 @@ def signup(body: RequestBody):
     except HTTPException:
         raise
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Unable to signup user: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unable to signup user: {str(e)}")
 
@@ -70,8 +71,6 @@ def login(body: RequestBody):
     except HTTPException:
         raise
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Unable to login user: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -98,8 +97,5 @@ def get_current_user(authorization: str = Header(None)):
     except HTTPException:
         raise
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Unable to get user: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")
-

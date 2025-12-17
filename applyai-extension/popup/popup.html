@@ -10,21 +10,43 @@
 
 <body>
     <div class="container">
-        <div class="brand">
+        <header class="brand">
             <div class="logo" aria-hidden="true">A</div>
             <div class="title-wrap">
-                <div class="title">ApplyAI</div>
-                <div class="subtitle">Chrome Extension</div>
+                <div class="title-row">
+                    <div class="title">ApplyAI</div>
+                    <span id="statusPill" class="pill pill--idle">Checking…</span>
+                </div>
+                <div class="subtitle">Autofill job applications faster</div>
             </div>
-        </div>
+        </header>
 
-        <button id="connectBtn" class="btn" type="button">
-            Connect
-        </button>
+        <section class="card">
+            <div class="row">
+                <div class="label">Account</div>
+                <div id="accountValue" class="value muted">Not connected</div>
+            </div>
 
-        <p class="hint">
-            Opens your ApplyAI connect page in a new tab.
-        </p>
+            <div class="divider"></div>
+
+            <div class="actions">
+                <button id="primaryBtn" class="btn btn--primary" type="button">
+                    Connect
+                </button>
+
+                <button id="secondaryBtn" class="btn btn--ghost" type="button" style="display:none;">
+                    Open Dashboard
+                </button>
+
+                <button id="disconnectBtn" class="btn btn--danger" type="button" style="display:none;">
+                    Disconnect
+                </button>
+            </div>
+
+            <p id="hint" class="hint">
+                Connect to sync your profile and autofill preferences.
+            </p>
+        </section>
     </div>
 
     <script src="./popup.js"></script>

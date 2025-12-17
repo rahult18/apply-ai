@@ -43,3 +43,7 @@ class UpdateProfileBody(BaseModel):
     race: Optional[str] = None
     veteran_status: Optional[str] = None
     disability_status: Optional[str] = None
+
+class ExchangeRequestBody(BaseModel):
+    one_time_code: str
+    install_id: str

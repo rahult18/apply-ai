@@ -6,5 +6,26 @@
     "action": {
         "default_title": "ApplyAI",
         "default_popup": "popup/popup.html"
-    }
+    },
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "http://localhost:3000/extension/connect*"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ],
+    "permissions": [
+        "storage",
+        "tabs"
+    ],
+    "host_permissions": [
+        "http://localhost:3000/*",
+        "http://localhost:8000/*"
+    ]
 }
