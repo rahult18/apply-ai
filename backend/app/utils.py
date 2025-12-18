@@ -33,7 +33,7 @@ def extract_jd(content: str, llm: LLM, url: str = None) -> JD:
         "education_requirements": List of education requirements for the job, return as a list of strings,
         "experience_requirements": List of experience requirements for the job, return as a list of strings,
         "keywords": List of keywords for the job, return as a list of strings,
-        "job_site_type": Type of the job posting source/platform - determine from the URL or content, must be one of: "linkedin", "job-board" (for platforms like greenhouse, askbyhq), "y-combinator", or "careers page" (company's own careers page), return as a string,
+        "job_site_type": Hostname of the job posting URL, return as a string, for example: boards.greenhouse.io, jobs.ashbyhq.com, jobs.lever.co,
         "open_to_visa_sponsorship": true/false - check if the company is open to US Work visa sponsorship, return as a boolean
     }}
     ```

@@ -169,6 +169,7 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
         if body.dom_html:
             logger.info(f"Successfully fetched the content from the DOM!")
             cleaned_content = clean_content(body.dom_html)
+            jd_dom_html = body.dom_html
         else:
             # Creating a async context manager that creates and manages HTTP client session
             async with aiohttp.ClientSession() as session:
@@ -178,6 +179,7 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
                         logger.info(f"Failed to fetch content from the URL: {response.status}")
                         raise HTTPException(status_code=response.status, detail=f"Failed to fetch content from the URL: {response.status}")
                     content = await response.text()
+                    jd_dom_html = content
                     logger.info(f"Successfully fetched the content from the URL!")
                     cleaned_content = clean_content(content)
         
@@ -190,8 +192,8 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
         # write the JD to DB: public.job_applications table
         with supabase.db_connection.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, jd.job_site_type, jd.open_to_visa_sponsorship)
+                "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship, jd_dom_html) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, jd.job_site_type, jd.open_to_visa_sponsorship, jd_dom_html)
             )
             # fetching the inserted job_application id
             job_application_id = cursor.fetchone()[0]
