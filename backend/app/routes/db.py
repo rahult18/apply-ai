@@ -1,10 +1,16 @@
-from fastapi import APIRouter, HTTPException, Query, Header, Form, File, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Header, Form, File, UploadFile, BackgroundTasks
 from typing import Optional
 import aiohttp
 import logging
 import json
 import os
 from app.services.supabase import Supabase
+from app.services.llm import LLM
+from app.utils import parse_resume
+
+# initialize LLM client
+llm = LLM()
+
 # initialize supabase
 supabase = Supabase()
 
@@ -44,7 +50,6 @@ def get_profile(authorization: str = Header(None)):
                     
                     # Create signed URL (valid for 1 hour)
                     # Using create_signed_urls with a single path (returns a list)
-                    # Reference: https://supabase.com/docs/reference/python/storage-from-createsignedurls
                     signed_urls_response = storage.create_signed_urls(
                         paths=[resume_path],
                         expires_in=3600  # 1 hour
@@ -130,7 +135,8 @@ async def update_profile(
     gender: Optional[str] = Form(None),
     race: Optional[str] = Form(None),
     veteran_status: Optional[str] = Form(None),
-    disability_status: Optional[str] = Form(None)
+    disability_status: Optional[str] = Form(None),
+    background_tasks: BackgroundTasks = None
 ):
     try:
         if not authorization or not authorization.startswith("Bearer "):
@@ -178,6 +184,10 @@ async def update_profile(
                 else:
                     # Fallback: construct path manually
                     resume_url = file_path
+                
+                # If resume was updated, trigger background task to parse it
+                if resume_url is not None:
+                    background_tasks.add_task(parse_resume, user_id, resume_url, llm)
                     
             except Exception as upload_error:
                 logger.error(f"Error uploading resume: {str(upload_error)}")
@@ -279,7 +289,7 @@ async def update_profile(
         # Execute UPDATE query
         try:
             with supabase.db_connection.cursor() as cursor:
-                update_query = f"UPDATE users SET {', '.join(update_fields)}, updated_at = NOW() WHERE id = %s"
+                update_query = f"UPDATE users SET {', '.join(update_fields)}, resume_parse_status = 'In progress', updated_at = NOW() WHERE id = %s"
                 cursor.execute(update_query, update_values)
                 supabase.db_connection.commit()
         except Exception as db_error:
@@ -299,4 +309,3 @@ async def update_profile(
         logger.error(f"Error updating profile: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Unable to update profile: {str(e)}")
 
-        

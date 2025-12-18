@@ -47,3 +47,37 @@ class UpdateProfileBody(BaseModel):
 class ExchangeRequestBody(BaseModel):
     one_time_code: str
     install_id: str
+class EducationEntry(BaseModel):
+    institution: str
+    degree: str
+    field_of_study: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    description: Optional[str] = None
+
+class ExperienceEntry(BaseModel):
+    company: str
+    position: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    description: Optional[str] = None
+
+class ProjectEntry(BaseModel):
+    name: str
+    description: Optional[str] = None
+    link: Optional[str] = None
+
+class CertificationEntry(BaseModel):
+    name: str
+    issuing_organization: Optional[str] = None
+    issue_date: Optional[str] = None
+    expiration_date: Optional[str] = None
+    credential_id: Optional[str] = None
+    credential_url: Optional[str] = None
+class ExtractedResumeModel(BaseModel):
+    summary: Optional[str] = None
+    skills: Optional[list[str]] = None
+    experience: Optional[list[ExperienceEntry]] = None
+    education: Optional[list[EducationEntry]] = None
+    certifications: Optional[list[CertificationEntry]] = None
+    projects: Optional[list[ProjectEntry]] = None

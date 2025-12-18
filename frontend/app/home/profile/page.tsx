@@ -46,6 +46,41 @@ interface UserProfile {
   disability_status?: string
   resume?: string
   resume_url?: string
+  resume_text?: string
+  resume_profile?: {
+    summary?: string;
+    skills?: string[];
+    experience?: {
+      company: string;
+      position: string;
+      start_date?: string;
+      end_date?: string;
+      description?: string;
+    }[];
+    education?: {
+      institution: string;
+      degree: string;
+      field_of_study: string;
+      start_date?: string;
+      end_date?: string;
+      description?: string;
+    }[];
+    certifications?: {
+      name: string;
+      issuing_organization?: string;
+      issue_date?: string;
+      expiration_date?: string;
+      credential_id?: string;
+      credential_url?: string;
+    }[];
+    projects?: {
+      name: string;
+      description?: string;
+      link?: string;
+    }[];
+  };
+  resume_parsed_at?: string;
+  resume_parse_status?: 'PENDING' | 'COMPLETED' | 'FAILED';
 }
 
 export default function ProfilePage() {
@@ -58,6 +93,8 @@ export default function ProfilePage() {
   const [success, setSuccess] = useState(false)
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [desiredLocationInput, setDesiredLocationInput] = useState("")
+  const [isParsingResume, setIsParsingResume] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
 
   useEffect(() => {
     if (!loading && !user) {
@@ -95,6 +132,24 @@ export default function ProfilePage() {
         if (data.desired_location && Array.isArray(data.desired_location)) {
           setDesiredLocationInput(data.desired_location.join(", "))
         }
+
+        // Update parsing status
+        if (data.resume_parse_status === 'PENDING') {
+            setIsParsingResume(true);
+            // If still pending, try to re-fetch after a delay
+            if (retryCount < 2) { // Limit retries to prevent infinite loops
+                setTimeout(() => {
+                    setRetryCount(prev => prev + 1);
+                    fetchProfile();
+                }, 30000); // 30 seconds
+            } else {
+                console.warn("Resume parsing still pending after multiple retries.");
+            }
+        } else {
+            setIsParsingResume(false);
+            setRetryCount(0); // Reset retry count on completion or failure
+        }
+
       }
     } catch (error) {
       console.error("Failed to fetch profile:", error)
@@ -175,7 +230,17 @@ export default function ProfilePage() {
 
       setSuccess(true)
       setTimeout(() => setSuccess(false), 3000)
-      fetchProfile()
+      // If a resume was uploaded, start monitoring its parsing status
+      if (resumeFile) {
+          setIsParsingResume(true);
+          setRetryCount(0); // Reset retry count for a new upload
+          // Initiate first fetch after a short delay
+          setTimeout(() => {
+              fetchProfile();
+          }, 5000); // 5 seconds initial delay before first check
+      } else {
+          fetchProfile();
+      }
     } catch (err: any) {
       setError(err.message || "An error occurred while updating profile")
     } finally {
@@ -490,6 +555,156 @@ export default function ProfilePage() {
                   </p>
                 </div>
               </div>
+
+              {/* Resume Parsing Status */}
+              {(profile.resume || isParsingResume) && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Resume Parsing Status</h3>
+                  {
+                    profile.resume_parse_status === 'PENDING' && isParsingResume && (
+                      <div className="p-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-md">
+                        Resume parsing in progress... This may take a moment.
+                      </div>
+                    )
+                  }
+                  {
+                    profile.resume_parse_status === 'COMPLETED' && !isParsingResume && profile.resume_parsed_at && (
+                      <div className="p-3 bg-green-50 border border-green-200 text-green-700 rounded-md">
+                        Resume parsed successfully on {new Date(profile.resume_parsed_at).toLocaleDateString()}.
+                      </div>
+                    )
+                  }
+                  {
+                    profile.resume_parse_status === 'FAILED' && !isParsingResume && (
+                      <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-md">
+                        Failed to parse resume. Please try uploading again.
+                      </div>
+                    )
+                  }
+                </div>
+              )}
+
+              {/* Parsed Resume Data */}
+              {profile.resume_profile && !isParsingResume && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Parsed Resume Data</h3>
+                  <div className="grid gap-4">
+                    {profile.resume_profile.summary && (
+                      <div>
+                        <Label>Summary</Label>
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                          {profile.resume_profile.summary}
+                        </p>
+                      </div>
+                    )}
+                    {profile.resume_profile.skills && profile.resume_profile.skills.length > 0 && (
+                      <div>
+                        <Label>Skills</Label>
+                        <p className="text-sm text-muted-foreground">
+                          {profile.resume_profile.skills.join(", ")}
+                        </p>
+                      </div>
+                    )}
+                    {profile.resume_profile.experience && profile.resume_profile.experience.length > 0 && (
+                      <div>
+                        <Label>Experience</Label>
+                        <div className="space-y-2">
+                          {profile.resume_profile.experience.map((exp, index) => (
+                            <Card key={index} className="p-3">
+                              <p className="font-medium">{exp.position} at {exp.company}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {exp.start_date} - {exp.end_date || "Present"}
+                              </p>
+                              {exp.description && (
+                                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">
+                                  {exp.description}
+                                </p>
+                              )}
+                            </Card>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {profile.resume_profile.education && profile.resume_profile.education.length > 0 && (
+                      <div>
+                        <Label>Education</Label>
+                        <div className="space-y-2">
+                          {profile.resume_profile.education.map((edu, index) => (
+                            <Card key={index} className="p-3">
+                              <p className="font-medium">{edu.degree} in {edu.field_of_study}</p>
+                              <p className="text-xs text-muted-foreground">{edu.institution}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {edu.start_date} - {edu.end_date || "Present"}
+                              </p>
+                              {edu.description && (
+                                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">
+                                  {edu.description}
+                                </p>
+                              )}
+                            </Card>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {profile.resume_profile.projects && profile.resume_profile.projects.length > 0 && (
+                      <div>
+                        <Label>Projects</Label>
+                        <div className="space-y-2">
+                          {profile.resume_profile.projects.map((proj, index) => (
+                            <Card key={index} className="p-3">
+                              <p className="font-medium">{proj.name}</p>
+                              {proj.description && (
+                                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">
+                                  {proj.description}
+                                </p>
+                              )}
+                              {proj.link && (
+                                <a
+                                  href={proj.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-blue-600 hover:underline mt-1 block"
+                                >
+                                  {proj.link}
+                                </a>
+                              )}
+                            </Card>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {profile.resume_profile.certifications && profile.resume_profile.certifications.length > 0 && (
+                      <div>
+                        <Label>Certifications</Label>
+                        <div className="space-y-2">
+                          {profile.resume_profile.certifications.map((cert, index) => (
+                            <Card key={index} className="p-3">
+                              <p className="font-medium">{cert.name}</p>
+                              {cert.issuing_organization && (
+                                <p className="text-xs text-muted-foreground">{cert.issuing_organization}</p>
+                              )}
+                              <p className="text-xs text-muted-foreground">
+                                {cert.issue_date}
+                                {cert.expiration_date ? ` - ${cert.expiration_date}` : ""}
+                              </p>
+                              {cert.credential_url && (
+                                <a
+                                  href={cert.credential_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-blue-600 hover:underline mt-1 block"
+                                >
+                                  View Credential
+                                </a>
+                              )}
+                            </Card>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Demographic Information (Optional) */}
               <div className="space-y-4">

@@ -3,9 +3,14 @@ import re
 import html
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from app.services.llm import LLM
-from app.models import JD
+from app.services.supabase import Supabase
+from app.models import JD, ExtractedResumeModel
+import fitz
 
 logger = logging.getLogger(__name__)
+
+# initiate supabase client
+supabase = Supabase()
 
 def extract_jd(content: str, llm: LLM, url: str = None) -> JD:
     logger.info(f"Extracting JD from the given content: {len(content)} chars")
@@ -132,3 +137,95 @@ def normalize_url(url: str) -> str:
         logger.warning(f"Failed to normalize URL {url}: {str(e)}, returning original")
         return url
 
+def parse_resume(user_id: str, resume_url: str, llm: LLM):
+    """
+    This functions parses the resume located at resume_url and updates the user's profile with resume extracted information
+    
+    :param user_id: User ID of the user whose resume is to be parsed
+    :type user_id: str
+    :param resume_url: URL of the resume to be parsed
+    :type resume_url: str
+    """
+    try:
+        # fetch the resume from supabase storage
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute("SELECT resume FROM public.users WHERE id = %s", (user_id,))
+            resume_path = cursor.fetchone()[0]
+            resume_file = supabase.client.storage.from_("user-documents").download(resume_path)
+            # read the resume file using fitz
+            doc = fitz.open(stream=resume_file, filetype="pdf")
+            extracted_resume_text = ""
+            for page in doc:
+                extracted_resume_text += page.get_text()
+            doc.close()
+
+            # Use LLM to parse the resume text
+            prompt = f"""
+            You are an expert resume parser. Below is the extracted text from a user's resume. Please extract the following information and return it in a structured JSON format without any extra text or codefences.
+
+            Resume Text:
+            {extracted_resume_text}
+
+            Expected JSON Output:
+            ```json
+            {{
+                "summary": "Summary of the user's professional background, return as a string",
+                "skills": ["List of skills mentioned in the resume, return as a list of strings"],
+                "experience": [
+                    {{
+                        "company": "Company Name",
+                        "position": "Job Title",
+                        "start_date": "YYYY-MM-DD",
+                        "end_date": "YYYY-MM-DD or null if current",
+                        "description": "Job responsibilities and achievements as a string"
+                    }}
+                ],
+                "education": [
+                    {{
+                        "institution": "Institution Name",
+                        "degree": "Degree Name",
+                        "field_of_study": "Field of Study",
+                        "start_date": "YYYY-MM-DD",
+                        "end_date": "YYYY-MM-DD or null if current",
+                        "description": "Description of academic achievements or coursework as a string"
+                    }}
+                ],
+                "certifications": [
+                    {{
+                        "name": "Certification Name",
+                        "issuing_organization": "Organization Name",
+                        "issue_date": "YYYY-MM-DD",
+                        "expiration_date": "YYYY-MM-DD or null if no expiration",
+                        "credential_id": "Credential ID or null",
+                        "credential_url": "URL to credential or null"
+                    }}
+                ],
+                "projects": [
+                    {{
+                        "name": "Project Name",
+                        "description": "Project description as a string",
+                        "link": "URL to project or null"
+                    }}
+                ]
+            }}
+            ```
+            """
+
+            response = llm.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": ExtractedResumeModel.model_json_schema(),
+                }
+            )
+            resume_data = response.text
+
+            # Update user's profile in the database with parsed resume data
+            update_query = "UPDATE public.users SET resume_text = %s, resume_profile = %s, resume_parse_status = 'Completed', resume_parsed_at = NOW() WHERE id = %s"
+            cursor.execute(update_query, (extracted_resume_text, resume_data, user_id))
+            supabase.db_connection.commit()
+            logger.info(f"Successfully parsed and updated resume for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error parsing resume for user {user_id} from {resume_url}: {str(e)}")
