@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header
-from app.models import ExchangeRequestBody
+from app.models import ExchangeRequestBody, JobsIngestRequestBody
 from app.services.supabase import Supabase
+from app.services.llm import LLM
 import logging
 import secrets
 import hashlib
@@ -9,6 +10,8 @@ from pathlib import Path
 import dotenv
 import os
 from jose import JWTError, jwt
+from app.utils import clean_content, extract_jd, normalize_url
+import aiohttp
 
 # Loading the env variables from backend directory
 BASE_DIR = Path(__file__).parent.parent
@@ -16,6 +19,8 @@ dotenv.load_dotenv(BASE_DIR / ".env")
 
 logger = logging.getLogger(__name__)
 
+# Initialize LLM client
+llm = LLM()
 # Initialize Supabase client
 supabase = Supabase()
 
@@ -140,3 +145,70 @@ def fetch_user_using_extension_token(authorization: str = Header(None)):
     except Exception as e:
         logger.info(f"Unable to fetch user: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")
+    
+
+@router.post("/jobs/ingest")
+async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: str = Header(None)):
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+        token = authorization.split("Bearer ")[1]
+        secret_key = os.getenv("SECRET_KEY")
+        algorithm = os.getenv("ALGORITHM")
+
+        # Decode and verify the JWT token
+        try:
+            payload = jwt.decode(token, secret_key, algorithms=[algorithm], audience='applyai-extension', issuer='applyai-api')
+            user_id = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Invalid token")
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        if body.dom_html:
+            logger.info(f"Successfully fetched the content from the DOM!")
+            cleaned_content = clean_content(body.dom_html)
+        else:
+            # Creating a async context manager that creates and manages HTTP client session
+            async with aiohttp.ClientSession() as session:
+                # Creating a context manager that manages the HTTP response
+                async with session.get(body.job_link) as response:
+                    if response.status != 200:
+                        logger.info(f"Failed to fetch content from the URL: {response.status}")
+                        raise HTTPException(status_code=response.status, detail=f"Failed to fetch content from the URL: {response.status}")
+                    content = await response.text()
+                    logger.info(f"Successfully fetched the content from the URL!")
+                    cleaned_content = clean_content(content)
+        
+        jd = extract_jd(cleaned_content, llm, body.job_link)
+        logger.info(f"Successfully extracted the job description!")
+        
+        # Normalize URL to prevent duplicates from tracking params, trailing slashes, etc.
+        normalized_url = normalize_url(body.job_link)
+
+        # write the JD to DB: public.job_applications table
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, jd.job_site_type, jd.open_to_visa_sponsorship)
+            )
+            # fetching the inserted job_application id
+            job_application_id = cursor.fetchone()[0]
+            supabase.db_connection.commit()
+        logger.info(f"Successfully wrote to the DB!")
+
+        return {
+            "job_application_id": job_application_id,
+            "url": body.job_link,
+            "job_title": jd.job_title,
+            "company": jd.company
+        }
+    except aiohttp.ClientError as e:
+        logger.info(f"Invalid job_link URL provided: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error fetching URL: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.info(f"Unable to ingest job: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unable to ingest job")

@@ -81,3 +81,7 @@ class ExtractedResumeModel(BaseModel):
     education: Optional[list[EducationEntry]] = None
     certifications: Optional[list[CertificationEntry]] = None
     projects: Optional[list[ProjectEntry]] = None
+
+class JobsIngestRequestBody(BaseModel):
+    job_link: str
+    dom_html: Optional[str] = None

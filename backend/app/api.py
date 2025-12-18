@@ -28,10 +28,9 @@ app.add_middleware(
 )
 
 # Include routers
-from app.routes import auth, scrape, db, extension
+from app.routes import auth, db, extension
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(scrape.router, tags=["scrape"])
 app.include_router(db.router, prefix="/db", tags=["db"])
 app.include_router(extension.router, prefix="/extension", tags=["extension"])
 

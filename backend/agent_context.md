@@ -39,15 +39,17 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `extension.py`: Handles authentication and connection for the browser extension:
       - `POST /extension/connect/start`: Generates a one-time code for the authenticated user to connect the browser extension. The code is hashed and stored with an expiration.
       - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token specifically for the browser extension.
-    - `scrape.py`: Handles job scraping functionality:
-      - `POST /scrape?job_link=<url>`: Scrapes a job description from the provided URL, cleans the HTML content, extracts structured data using the LLM service, and stores the job application in the `job_applications` table for the authenticated user.
+    - `extension.py`: Handles authentication and connection for the browser extension:
+      - `POST /extension/connect/start`: Generates a one-time code for the authenticated user to connect the browser extension. The code is hashed and stored with an expiration.
+      - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token specifically for the browser extension.
+      - `POST /extension/jobs/ingest`: Ingests a job application either by scraping a provided `job_link` or by extracting information from `dom_html` provided by the extension. It cleans the content, extracts structured data using the LLM service, and stores the job application in the `job_applications` table for the authenticated user.
   - `services/`: Service layer for external integrations.
     - `llm.py`: Integrates with Google Generative AI for tasks like job description extraction.
     - `supabase.py`: Provides a client for interacting with Supabase, including authentication and database operations using `psycopg2` for direct database connections.
 
 ## Services
 - **Authentication**: User signup, login, and user info managed via Supabase's authentication service.
-- **Job Scraping**: Utilizes Google Generative AI (LLM) to extract structured job descriptions from raw HTML content.
+- **Job Ingestion**: Utilizes Google Generative AI (LLM) to extract structured job descriptions from raw HTML content, either fetched from a URL or provided directly.
 - **Supabase Integration**: Handles user management, profile storage, job application storage, and resume storage in Supabase. Direct `psycopg2` connections are used for database operations.
 - **Google Generative AI Integration**: Used primarily for intelligent extraction of job description details.
 
@@ -69,7 +71,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `GET /db/get-status-distribution`: Get distribution of job application statuses.
 - `POST /extension/connect/start`: Generate a one-time code for extension connection.
 - `POST /extension/connect/exchange`: Exchange one-time code for an extension token.
-- `POST /scrape?job_link=<url>`: Scrape and extract job description from URL.
+- `POST /extension/jobs/ingest`: Ingest a job application (either from URL or DOM HTML) for the authenticated user.
 
 ## Notes
 - All environment variables are loaded from `.env`.
