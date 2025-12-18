@@ -18,6 +18,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `extract_jd`: Extracts structured job description data from raw HTML content using the LLM service.
     - `clean_content`: Cleans HTML content by removing script/style tags, JavaScript, and normalizing whitespace.
     - `normalize_url`: Normalizes URLs by removing tracking parameters, fragments, and normalizing casing and trailing slashes.
+    - `parse_resume`: Parses a user's resume (PDF) using an LLM and updates the user's profile in the database with the extracted information.
   - `routes/`: API route handlers.
     - `auth.py`: Handles user authentication:
       - `POST /auth/signup`: Registers a new user with email and password, stores user in Supabase, and returns a session token or a message for email confirmation.
