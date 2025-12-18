@@ -34,6 +34,10 @@
                     Connect
                 </button>
 
+                <button id="extractBtn" class="btn btn--primary" type="button" style="display:none;">
+                    Extract Job Description
+                </button>
+
                 <button id="secondaryBtn" class="btn btn--ghost" type="button" style="display:none;">
                     Open Dashboard
                 </button>
@@ -46,6 +50,15 @@
             <p id="hint" class="hint">
                 Connect to sync your profile and autofill preferences.
             </p>
+
+            <div id="resultCard" class="result" style="display:none;">
+                <div id="resultTitle" class="result__title"></div>
+                <div id="resultCompany" class="result__company"></div>
+                <div class="result__divider"></div>
+                <div class="result__meta">Saved to tracker</div>
+            </div>
+
+            <p id="extractStatus" class="hint hint--status" style="display:none;"></p>
         </section>
     </div>
 
