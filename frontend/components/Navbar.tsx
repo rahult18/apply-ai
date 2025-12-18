@@ -39,19 +39,7 @@ export function Navbar() {
                     </NavigationMenuLink>
                   </Link>
                 </NavigationMenuItem>
-                <NavigationMenuItem>
-                  <Link href="/home/add" legacyBehavior passHref>
-                    <NavigationMenuLink
-                      className={cn(
-                        navigationMenuTriggerStyle(),
-                        "cursor-pointer",
-                        pathname === "/home/add" && "bg-accent"
-                      )}
-                    >
-                      Add to tracker
-                    </NavigationMenuLink>
-                  </Link>
-                </NavigationMenuItem>
+
                 <NavigationMenuItem>
                   <Link href="/home/profile" legacyBehavior passHref>
                     <NavigationMenuLink

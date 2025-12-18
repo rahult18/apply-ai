@@ -11,7 +11,7 @@ This folder contains the Next.js frontend for the Application Tracker project. I
     - `connect/page.tsx`: Handles the connection process for the browser extension. It fetches a one-time code from the backend and uses `window.postMessage` to send it to the extension for authentication.
   - `home/`: Main user dashboard.
     - `page.tsx`: The home dashboard displays job application statistics, charts (Applications Over Time, Status Distribution), and a table of all applications. It fetches application data and KPI data from the backend.
-    - `add/page.tsx`: Allows users to add a new job application by providing a job posting URL. It calls the backend's `/scrape` endpoint to extract job details and save them.
+
     - `profile/page.tsx`: Displays and allows editing of the user's profile information. It fetches and updates profile data (including resume upload/deletion, monitoring resume parsing status, and displaying parsed resume data) via backend API calls.
   - `login/page.tsx`: User login page, allowing users to log in with email/password or Google. Interacts with `AuthContext` for authentication logic.
   - `signup/page.tsx`: User signup page, allowing new users to register with email/password or Google. Interacts with `AuthContext` for registration logic.
