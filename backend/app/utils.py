@@ -229,3 +229,54 @@ def parse_resume(user_id: str, resume_url: str, llm: LLM):
 
     except Exception as e:
         logger.error(f"Error parsing resume for user {user_id} from {resume_url}: {str(e)}")
+    
+
+def check_if_job_application_belongs_to_user(user_id: str, job_application_id: str, supabase: Supabase) -> bool:
+    """
+    Check if the given job application ID belongs to the specified user ID.
+
+    :param user_id: User ID to check ownership against
+    :type user_id: str
+    :param job_application_id: Job Application ID to verify
+    :type job_application_id: str
+    :param supabase: Supabase client instance for database access
+    :type supabase: Supabase
+    :return: True if the job application belongs to the user, False otherwise
+    :rtype: bool
+    """
+    try:
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM public.job_applications WHERE id = %s AND user_id = %s", (job_application_id, user_id))
+            count = cursor.fetchone()[0]
+            if count > 0:
+                return True
+            else:
+                return False
+    except Exception as e:
+        logger.error(f"Error checking job application ownership for user_id {user_id} and job_application_id {job_application_id}: {str(e)}")
+        return False
+
+def check_if_run_id_belongs_to_user(run_id: str, user_id: str, supabase: Supabase) -> bool:
+    """
+    Check if the given autofill run ID belongs to the specified user ID.
+
+    :param run_id: Autofill Run ID to verify
+    :type run_id: str
+    :param user_id: User ID to check ownership against
+    :type user_id: str
+    :param supabase: Supabase client instance for database access
+    :type supabase: Supabase
+    :return: True if the autofill run belongs to the user, False otherwise
+    :rtype: bool
+    """
+    try:
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM public.autofill_runs WHERE id = %s AND user_id = %s", (run_id, user_id))
+            count = cursor.fetchone()[0]
+            if count > 0:
+                return True
+            else:
+                return False
+    except Exception as e:
+        logger.error(f"Error checking autofill run ownership for run_id {run_id} and user_id {user_id}: {str(e)}")
+        return False

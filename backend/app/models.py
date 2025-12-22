@@ -85,3 +85,84 @@ class ExtractedResumeModel(BaseModel):
 class JobsIngestRequestBody(BaseModel):
     job_link: str
     dom_html: Optional[str] = None
+
+class AutofillPlanRequest(BaseModel):
+    job_application_id: str
+    page_url: str
+    dom_html: str
+
+class AutofillPlanResponse(BaseModel):
+    run_id: str
+    status: str
+    plan_json: Optional[dict] = None
+    plan_summary: Optional[dict] = None
+
+class AutofillEventRequest(BaseModel):
+    run_id: str
+    event_type: str
+    payload: Optional[dict] = None
+
+class AutofillFeedbackRequest(BaseModel):
+    run_id: str
+    job_application_id: str
+    question_signature: Optional[str] = None
+    correction: Optional[dict] = None
+
+class AutofillSubmitRequest(BaseModel):
+    run_id: str
+    payload: Optional[dict] = None
+
+class AutofillAgentInput(BaseModel):
+    run_id: str
+    job_application_id: str
+    user_id: str
+
+    #application page details
+    page_url: str
+    dom_html: str
+    
+    #job details
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    job_posted: Optional[str] = None
+    job_description: Optional[str] = None
+    required_skills: Optional[list[str]] = None
+    preferred_skills: Optional[list[str]] = None
+    education_requirements: Optional[list[str]] = None
+    experience_requirements: Optional[list[str]] = None
+    keywords: Optional[list[str]] = None
+    open_to_visa_sponsorship: Optional[bool] = None
+    job_site_type: Optional[str] = None
+
+    #user details
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    github_url: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    other_url: Optional[str] = None
+    resume_file_path: Optional[str] = None
+    resume_profile: Optional[ExtractedResumeModel] = None 
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = None
+    authorized_to_work_in_us: Optional[bool] = None
+    visa_sponsorship: Optional[bool] = None
+    visa_sponsorship_type: Optional[str] = None
+    desired_salary: Optional[float] = None
+    desired_location: Optional[list[str]] = None
+    gender: Optional[str] = None
+    race: Optional[str] = None
+    veteran_status: Optional[str] = None
+    disability_status: Optional[str] = None
+
+
+class AutofillAgentOutput(BaseModel):
+    status: str
+    plan_json: Optional[dict] = None
+    plan_summary: Optional[dict] = None
