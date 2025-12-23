@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '''..
 
 from langgraph.graph import StateGraph, START, END
 from app.models import AutofillAgentInput, AutofillAgentOutput
-from app.dag_utils import FormField, FormFieldAnswer, AutofillPlanJSON, RunStatus, AutofillPlanSummary, extract_form_fields_from_dom_html, LLMAnswersResponse, LLMAnswerItem
+from app.dag_utils import FormField, FormFieldAnswer, AutofillPlanJSON, RunStatus, AutofillPlanSummary, extract_form_fields_from_dom_html, build_autofill_plan, summarize_autofill_plan, LLMAnswersResponse, LLMAnswerItem
 from typing import TypedDict, List, Dict, Any, Optional
 from app.services.llm import LLM
 from app.services.supabase import Supabase
@@ -65,7 +65,7 @@ class DAG():
         """
         Extracts form fields from the DOM HTML.
         """
-        logger.info("Executing extract_form_fields_node")
+        logger.debug("Executing extract_form_fields_node")
         try:
             dom_html = state["input_data"].get("dom_html")
             if not dom_html:
@@ -77,7 +77,7 @@ class DAG():
 
             form_fields = extract_form_fields_from_dom_html(dom_html)
             logger.info(f"Extracted {len(form_fields)} form fields.")
-            logger.debug(f"Extracted form fields: {form_fields}")
+            logger.debug("Extracted form fields: %s", form_fields)
             return {"form_fields": form_fields}
         except Exception as e:
             logger.error(f"Error in extract_form_fields_node: {str(e)}", exc_info=True)
@@ -88,7 +88,7 @@ class DAG():
         Generates answers for the extracted form fields using LLM and user data.
         Logs the prompt and the LLM response (JSON).
         """
-        logger.info("Executing generate_answers_node")
+        logger.debug("Executing generate_answers_node")
         try:
             form_fields: List[FormField] = state.get("form_fields", []) or []
             input_data = state.get("input_data", {}) or {}
@@ -197,7 +197,7 @@ class DAG():
 
             prompt = json.dumps(prompt_obj, ensure_ascii=False)
 
-            logger.info("LLM prompt (generate_answers_node): %s", prompt)
+            logger.debug("LLM prompt (generate_answers_node): %s", prompt)
 
             llm = LLM()
             response = llm.client.models.generate_content(
@@ -220,7 +220,7 @@ class DAG():
                 except Exception:
                     resp_text = str(response)
 
-            logger.info("LLM raw response (generate_answers_node): %s", resp_text)
+            logger.debug("LLM raw response (generate_answers_node): %s", resp_text)
 
             parsed = json.loads(resp_text)
             validated = LLMAnswersResponse.model_validate(parsed)
@@ -252,7 +252,8 @@ class DAG():
                     "action": item.action,
                 }
 
-            logger.info("Generated answers (normalized): %s", json.dumps(answers_out, ensure_ascii=False))
+            logger.info("Generated answers for %d fields.", len(answers_out))
+            logger.debug("Generated answers (normalized): %s", json.dumps(answers_out, ensure_ascii=False))
 
             return {"answers": answers_out}
 
@@ -265,11 +266,38 @@ class DAG():
         """
         Assembles the final autofill plan JSON and summary.
         """
+        run_id = state.get("run_id") or state.get("input_data", {}).get("run_id")
+        page_url = state.get("page_url") or state.get("input_data", {}).get("page_url")
+        form_fields: List[FormField] = state.get("form_fields", []) or []
+        answers: Dict[str, FormFieldAnswer] = state.get("answers", {}) or {}
+        errors = list(state.get("errors", []) or [])
+
+        if not run_id or not page_url:
+            errors.append("assemble_autofill_plan_node: missing run_id or page_url")
+            return {"errors": errors, "status": "failed"}
+
+        plan_json = build_autofill_plan(form_fields, answers, run_id, page_url)
+        plan_summary = summarize_autofill_plan(plan_json)
+        status: RunStatus = "failed" if errors else "completed"
+
         try:
-            pass
+            supabase = Supabase()
+            with supabase.db_connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE public.autofill_runs SET plan_json=%s, plan_summary=%s, status=%s, updated_at=NOW() WHERE id=%s",
+                    (json.dumps(plan_json), json.dumps(plan_summary), status, run_id),
+                )
+                supabase.db_connection.commit()
         except Exception as e:
-            state['errors'].append(f"Error in assemble_autofill_plan_node: {str(e)}")
-        return state
+            errors.append(f"Error in assemble_autofill_plan_node: {str(e)}")
+            status = "failed"
+
+        return {
+            "plan_json": plan_json,
+            "plan_summary": plan_summary,
+            "status": status,
+            "errors": errors,
+        }
     
 if __name__ == "__main__":
     dag = DAG()
@@ -278,7 +306,7 @@ if __name__ == "__main__":
     with open("/Users/rahul/Desktop/Projects/application-tracker/dom.txt", "r") as f:
         dom_contents = f.read()
     input = AutofillAgentInput(
-        run_id="1",
+        run_id="00000000-0000-0000-0000-000000000001",
         job_application_id="233",
         user_id="user_456",
         page_url="https://job-boards.greenhouse.io/anthropic/jobs/5042025008",
@@ -438,4 +466,6 @@ if __name__ == "__main__":
         disability_status="Not Disabled"
         )
     result = dag.app.invoke({"input_data": input.model_dump()})
-    # logger.info(f"DAG execution result: {result}")
+    logger.info("AutofillAgentOutput.status: %s", result.get("status"))
+    logger.debug("AutofillAgentOutput.plan_json: %s", json.dumps(result.get("plan_json")))
+    logger.info("AutofillAgentOutput.plan_summary: %s", json.dumps(result.get("plan_summary")))

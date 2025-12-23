@@ -1,6 +1,7 @@
 import logging
 import re
 import html
+import json
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from app.services.llm import LLM
 from app.services.supabase import Supabase
@@ -33,7 +34,7 @@ def extract_jd(content: str, llm: LLM, url: str = None) -> JD:
         "education_requirements": List of education requirements for the job, return as a list of strings,
         "experience_requirements": List of experience requirements for the job, return as a list of strings,
         "keywords": List of keywords for the job, return as a list of strings,
-        "job_site_type": Hostname of the job posting URL, return as a string, for example: boards.greenhouse.io, jobs.ashbyhq.com, jobs.lever.co,
+        "job_site_type": One of: linkedin, job-board, y-combinator, careers page,
         "open_to_visa_sponsorship": true/false - check if the company is open to US Work visa sponsorship, return as a boolean
     }}
     ```
@@ -50,6 +51,29 @@ def extract_jd(content: str, llm: LLM, url: str = None) -> JD:
     extracted_jd = JD.model_validate_json(response.text)
     # logger.info(f"LLM response: {extracted_jd}")
     return extracted_jd
+
+
+def infer_job_site_type(url: str) -> str:
+    try:
+        hostname = urlparse(url).netloc.lower()
+    except Exception:
+        hostname = ""
+
+    if "linkedin.com" in hostname:
+        return "linkedin"
+    if "ycombinator.com" in hostname:
+        return "y-combinator"
+    if any(
+        domain in hostname
+        for domain in (
+            "boards.greenhouse.io",
+            "job-boards.greenhouse.io",
+            "jobs.ashbyhq.com",
+            "jobs.lever.co",
+        )
+    ):
+        return "job-board"
+    return "careers page"
 
 
 def clean_content(content: str) -> str:
@@ -219,7 +243,8 @@ def parse_resume(user_id: str, resume_url: str, llm: LLM):
                     "response_json_schema": ExtractedResumeModel.model_json_schema(),
                 }
             )
-            resume_data = response.text
+            parsed_resume = ExtractedResumeModel.model_validate_json(response.text)
+            resume_data = json.dumps(parsed_resume.model_dump())
 
             # Update user's profile in the database with parsed resume data
             update_query = "UPDATE public.users SET resume_text = %s, resume_profile = %s, resume_parse_status = 'Completed', resume_parsed_at = NOW() WHERE id = %s"

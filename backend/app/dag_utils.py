@@ -84,19 +84,19 @@ def extract_form_fields_from_dom_html(dom_html: str) -> List[FormField]:
     """
     doc = lxml_html.fromstring(dom_html)
     root = _pick_form_scope(doc)
-    logger.info(f"Form scope selected: {root.tag}")
+    logger.info("Form scope selected: %s", root.tag)
 
     candidates = root.cssselect("input, textarea, select")
-    logger.info(f"Found {len(candidates)} candidate form elements.")
+    logger.info("Found %d candidate form elements.", len(candidates))
 
     out: List[FormField] = []
     seen: Set[str] = set()
     fallback_idx = 0
 
     for el in candidates:
-        logger.info(f"Processing element: {lxml_html.tostring(el, pretty_print=True).decode('utf-8').strip()}")
+        logger.debug("Processing element: %s", lxml_html.tostring(el, pretty_print=True).decode('utf-8').strip())
         if _should_skip_control(el):
-            logger.info("Skipping control element.")
+            logger.debug("Skipping control element.")
             continue
 
         input_type = _infer_input_type(el)
@@ -104,7 +104,7 @@ def extract_form_fields_from_dom_html(dom_html: str) -> List[FormField]:
         fallback_idx += 1
 
         if not sig or sig in seen:
-            logger.info(f"Skipping element with duplicate or empty signature: {sig}")
+            logger.debug("Skipping element with duplicate or empty signature: %s", sig)
             continue
         seen.add(sig)
 
@@ -125,10 +125,65 @@ def extract_form_fields_from_dom_html(dom_html: str) -> List[FormField]:
         if opts is not None:
             field["options"] = opts
         
-        logger.info(f"Extracted field: {field}")
+        logger.debug("Extracted field: %s", field)
         out.append(field)
 
     return out
+
+
+def build_autofill_plan(
+    form_fields: List[FormField],
+    answers: Dict[str, FormFieldAnswer],
+    run_id: str,
+    page_url: str,
+) -> AutofillPlanJSON:
+    fields: List[PlanField] = []
+    for f in form_fields:
+        sig = f.get("question_signature")
+        answer = _normalize_answer(answers.get(sig))
+        plan_field: PlanField = {
+            "question_signature": sig,
+            "label": f.get("label"),
+            "input_type": f.get("input_type"),
+            "required": f.get("required"),
+            "action": answer["action"],
+            "value": answer["value"],
+            "confidence": answer["confidence"],
+        }
+        selector = f.get("selector")
+        if selector:
+            plan_field["selector"] = selector
+        options = f.get("options")
+        if options:
+            plan_field["options"] = options
+        fields.append(plan_field)
+
+    return {
+        "run_id": run_id,
+        "page_url": page_url,
+        "fields": fields,
+    }
+
+
+def summarize_autofill_plan(plan_json: AutofillPlanJSON) -> AutofillPlanSummary:
+    total = len(plan_json.get("fields", []))
+    autofilled = 0
+    suggested = 0
+    skipped = 0
+    for f in plan_json.get("fields", []):
+        action = f.get("action")
+        if action == "autofill":
+            autofilled += 1
+        elif action == "suggest":
+            suggested += 1
+        else:
+            skipped += 1
+    return {
+        "total_fields": total,
+        "autofilled_fields": autofilled,
+        "suggested_fields": suggested,
+        "skipped_fields": skipped,
+    }
 
 
 def _pick_form_scope(doc):
@@ -282,5 +337,57 @@ def _options_for(el, input_type: "InputType") -> Optional[List[str]]:
         opts = [_norm_text(o.text_content()) for o in el.cssselect("option")]
         opts = [o for o in opts if o]
         return opts
+    if input_type == "select":
+        opts = _options_from_aria_listbox(el)
+        if opts:
+            return opts
     return None
 
+
+def _options_from_aria_listbox(el) -> List[str]:
+    """
+    Best-effort extraction for ARIA combobox/select widgets (e.g., React-Select).
+    Looks for a referenced listbox or common react-select listbox IDs.
+    """
+    root = el.getroottree().getroot()
+    listbox_id = (el.get("aria-controls") or el.get("aria-owns") or "").strip()
+
+    # React-Select often uses id="react-select-<input-id>-listbox".
+    if not listbox_id:
+        el_id = (el.get("id") or "").strip()
+        if el_id:
+            listbox_id = f"react-select-{el_id}-listbox"
+
+    listbox = None
+    if listbox_id:
+        matches = root.cssselect(f"#{listbox_id}")
+        if matches:
+            listbox = matches[0]
+
+    if listbox is None:
+        return []
+
+    options = [_norm_text(o.text_content()) for o in listbox.cssselect('[role="option"]')]
+    options = [o for o in options if o]
+    return options
+
+
+def _normalize_answer(answer: Optional[FormFieldAnswer]) -> FormFieldAnswer:
+    if not answer:
+        return {
+            "value": None,
+            "source": "unknown",
+            "confidence": 0.0,
+            "action": "skip",
+        }
+    action = answer.get("action")
+    if action not in {"autofill", "suggest", "skip"}:
+        action = "skip"
+    conf = float(answer.get("confidence") or 0.0)
+    conf = max(0.0, min(1.0, conf))
+    return {
+        "value": answer.get("value"),
+        "source": answer.get("source") or "unknown",
+        "confidence": conf,
+        "action": action,
+    }

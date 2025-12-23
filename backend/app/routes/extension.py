@@ -10,8 +10,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import dotenv
 import os
+import json
 from jose import JWTError, jwt
-from app.utils import clean_content, extract_jd, normalize_url, check_if_job_application_belongs_to_user, check_if_run_id_belongs_to_user
+from app.utils import clean_content, extract_jd, normalize_url, infer_job_site_type, check_if_job_application_belongs_to_user, check_if_run_id_belongs_to_user
 import aiohttp
 import uuid
 
@@ -192,12 +193,13 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
         
         # Normalize URL to prevent duplicates from tracking params, trailing slashes, etc.
         normalized_url = normalize_url(body.job_link)
+        job_site_type = infer_job_site_type(body.job_link)
 
         # write the JD to DB: public.job_applications table
         with supabase.db_connection.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship, jd_dom_html) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, jd.job_site_type, jd.open_to_visa_sponsorship, jd_dom_html)
+                (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, job_site_type, jd.open_to_visa_sponsorship, jd_dom_html)
             )
             # fetching the inserted job_application id
             job_application_id = cursor.fetchone()[0]
@@ -308,7 +310,13 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
                 autofill_agent_input.portfolio_url = user_record[7]
                 autofill_agent_input.other_url = user_record[8]
                 autofill_agent_input.resume_file_path = user_record[9]
-                autofill_agent_input.resume_profile = user_record[10]
+                resume_profile = user_record[10]
+                if isinstance(resume_profile, str):
+                    try:
+                        resume_profile = json.loads(resume_profile)
+                    except json.JSONDecodeError:
+                        resume_profile = None
+                autofill_agent_input.resume_profile = resume_profile
                 autofill_agent_input.address = user_record[11]
                 autofill_agent_input.city = user_record[12]
                 autofill_agent_input.state = user_record[13]
@@ -325,8 +333,12 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
                 autofill_agent_input.disability_status = user_record[24]
 
         # trigger the autofill agent DAG
-        autofill_agent_output = AutofillAgentOutput()
-        autofill_agent_output = dag.generate_autofill_plan(autofill_agent_input, supabase, llm)
+        dag_result = dag.app.invoke({"input_data": autofill_agent_input.model_dump()})
+        autofill_agent_output = AutofillAgentOutput(
+            status=dag_result.get("status"),
+            plan_json=dag_result.get("plan_json"),
+            plan_summary=dag_result.get("plan_summary"),
+        )
         
         # return the autofill plan response
         return AutofillPlanResponse(

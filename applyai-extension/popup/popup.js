@@ -25,7 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultCompany = document.getElementById("resultCompany");
 
   // current-session only UI state (no persistence across popup closes)
-  let sessionState = "idle"; // idle | extracting | success | error
+  let sessionState = "idle"; // idle | extracting | extracted | autofilling | autofilled | error
 
   const setPill = (state, text) => {
     statusPill.className = `pill pill--${state}`;
@@ -55,15 +55,21 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const setExtractButtonMode = (mode) => {
-    // mode: idle | extracting | success | error
+    // mode: idle | extracting | extracted | autofilling | error
     if (mode === "extracting") {
       extractBtn.disabled = true;
       extractBtn.textContent = "Extracting…";
       return;
     }
 
+    if (mode === "autofilling") {
+      extractBtn.disabled = true;
+      extractBtn.textContent = "Generating Autofill…";
+      return;
+    }
+
     extractBtn.disabled = false;
-    if (mode === "success") extractBtn.textContent = "Extract again";
+    if (mode === "extracted") extractBtn.textContent = "Generate Autofill";
     else if (mode === "error") extractBtn.textContent = "Try again";
     else extractBtn.textContent = "Extract Job Description";
   };
@@ -165,17 +171,47 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (msg?.type === "APPLYAI_EXTRACT_JD_RESULT") {
       if (msg.ok) {
-        sessionState = "success";
+        sessionState = "extracted";
         setPill("ok", "Saved");
         setExtractStatus("Saved ✓");
         showResultCard({ job_title: msg.job_title, company: msg.company });
-        setExtractButtonMode("success");
+        setExtractButtonMode("extracted");
+        hint.textContent = "Open the application form, then click Generate Autofill.";
       } else {
         sessionState = "error";
         setPill("err", "Error");
         setExtractStatus(`Extraction failed — ${msg.error || "unknown error"}`);
         clearResultCard();
         setExtractButtonMode("error");
+      }
+    }
+
+    if (msg?.type === "APPLYAI_AUTOFILL_PROGRESS") {
+      if (sessionState !== "autofilling") return;
+
+      setPill("warn", "Working");
+      if (msg.stage === "starting") setExtractStatus("Starting…");
+      if (msg.stage === "extracting_dom") setExtractStatus("Reading page…");
+      if (msg.stage === "planning") setExtractStatus("Generating autofill plan…");
+      if (msg.stage === "autofilling") setExtractStatus("Filling form…");
+    }
+
+    if (msg?.type === "APPLYAI_AUTOFILL_RESULT") {
+      if (msg.ok) {
+        sessionState = "autofilled";
+        setPill("ok", "Autofilled");
+        if (typeof msg.filled === "number") {
+          setExtractStatus(`Autofilled ${msg.filled} fields ✓`);
+        } else {
+          setExtractStatus("Autofill applied ✓");
+        }
+        setExtractButtonMode("extracted");
+        hint.textContent = "Review the form before submitting.";
+      } else {
+        sessionState = "extracted";
+        setPill("err", "Error");
+        setExtractStatus(`Autofill failed — ${msg.error || "unknown error"}`);
+        setExtractButtonMode("extracted");
       }
     }
   });
@@ -195,7 +231,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setDisconnectedUI();
   });
 
-  extractBtn.addEventListener("click", async () => {
+  const startExtraction = () => {
     sessionState = "extracting";
     clearResultCard();
     setPill("warn", "Working");
@@ -218,6 +254,38 @@ document.addEventListener("DOMContentLoaded", () => {
         setExtractStatus(`Extraction failed — ${resp?.error || "unknown error"}`);
       }
     });
+  };
+
+  const startAutofill = () => {
+    sessionState = "autofilling";
+    setPill("warn", "Working");
+    setExtractButtonMode("autofilling");
+    setExtractStatus("Generating autofill plan…");
+
+    chrome.runtime.sendMessage({ type: "APPLYAI_AUTOFILL_PLAN" }, (resp) => {
+      // background will also send progress/result messages; this callback is a backup
+      if (chrome.runtime.lastError) {
+        sessionState = "extracted";
+        setPill("err", "Error");
+        setExtractButtonMode("extracted");
+        setExtractStatus(`Autofill failed — ${chrome.runtime.lastError.message}`);
+        return;
+      }
+      if (!resp?.ok) {
+        sessionState = "extracted";
+        setPill("err", "Error");
+        setExtractButtonMode("extracted");
+        setExtractStatus(`Autofill failed — ${resp?.error || "unknown error"}`);
+      }
+    });
+  };
+
+  extractBtn.addEventListener("click", async () => {
+    if (sessionState === "extracted" || sessionState === "autofilled") {
+      startAutofill();
+      return;
+    }
+    startExtraction();
   });
 
   updateUI();
