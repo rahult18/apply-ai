@@ -8,11 +8,12 @@ import dotenv
 BASE_DIR = Path(__file__).parent.parent
 dotenv.load_dotenv(BASE_DIR / ".env")
 
-# Setting up the basic logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(message)s'
-)
+# Setting up the basic logging configuration (fallback if main.py did not configure it)
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 logger = logging.getLogger(__name__)
 
 # Creating the FastAPI backend
@@ -38,4 +39,3 @@ app.include_router(extension.router, prefix="/extension", tags=["extension"])
 @app.get("/")
 def health_check():
     return {"status": "ok"}
-

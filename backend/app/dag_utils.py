@@ -360,9 +360,13 @@ def _options_from_aria_listbox(el) -> List[str]:
 
     listbox = None
     if listbox_id:
-        matches = root.cssselect(f"#{listbox_id}")
-        if matches:
-            listbox = matches[0]
+        # Use XPath instead of CSS selector to avoid issues with special characters in IDs
+        try:
+            matches = root.xpath(f'//*[@id="{listbox_id}"]')
+            if matches:
+                listbox = matches[0]
+        except Exception as e:
+            logger.debug(f"Failed to find listbox with id={listbox_id}: {e}")
 
     if listbox is None:
         return []
@@ -383,6 +387,8 @@ def _normalize_answer(answer: Optional[FormFieldAnswer]) -> FormFieldAnswer:
     action = answer.get("action")
     if action not in {"autofill", "suggest", "skip"}:
         action = "skip"
+    if action == "suggest":
+        action = "autofill"
     conf = float(answer.get("confidence") or 0.0)
     conf = max(0.0, min(1.0, conf))
     return {

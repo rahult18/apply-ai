@@ -37,11 +37,13 @@ async function extractDomHtmlFromTab(tabId) {
         target: { tabId },
         func: () => {
             try {
+                console.log("ApplyAI: extracting DOM HTML from page");
                 return {
                     url: location.href,
                     dom_html: document.documentElement?.outerHTML || ""
                 };
             } catch (e) {
+                console.log("ApplyAI: DOM extraction error", e);
                 return { url: location.href, dom_html: "" };
             }
         }
@@ -54,6 +56,9 @@ async function applyAutofillPlanToTab(tabId, planJson) {
     const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
         func: (plan) => {
+            console.log("ApplyAI: applying autofill plan in page context", {
+                totalFields: Array.isArray(plan?.fields) ? plan.fields.length : 0
+            });
             const cssEscape = (value) => {
                 if (window.CSS && typeof window.CSS.escape === "function") {
                     return window.CSS.escape(value);
@@ -77,19 +82,193 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                 el.dispatchEvent(new Event("change", { bubbles: true }));
             };
 
+            const normalizeText = (text) => {
+                return String(text ?? "")
+                    .toLowerCase()
+                    .trim()
+                    .replace(/\s+/g, " ")
+                    .replace(/[^a-z0-9 ]+/g, "");
+            };
+
             const selectOption = (el, value) => {
-                const target = value == null ? "" : String(value);
+                const targetRaw = value == null ? "" : String(value);
+                const targetNorm = normalizeText(targetRaw);
+                const synonymMap = {
+                    us: "united states",
+                    usa: "united states",
+                    "united states of america": "united states"
+                };
+                const altTarget = synonymMap[targetNorm] || targetNorm;
+                const targets = Array.from(new Set([targetNorm, altTarget].filter(Boolean)));
+
+                const tag = (el.tagName || "").toLowerCase();
+                const role = (el.getAttribute("role") || "").toLowerCase();
+                const ariaAutocomplete = el.getAttribute("aria-autocomplete");
+
+                // Detect React select (input with role=combobox or aria-autocomplete)
+                const isReactSelect = tag === "input" && (role === "combobox" || ariaAutocomplete === "list");
+
+                if (isReactSelect) {
+                    console.log("ApplyAI: detected React select", {
+                        targetRaw,
+                        targets,
+                        role,
+                        ariaAutocomplete
+                    });
+
+                    try {
+                        // Focus the input
+                        el.focus();
+
+                        // Set value using native setter to trigger React
+                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype,
+                            "value"
+                        ).set;
+                        nativeInputValueSetter.call(el, targetRaw);
+
+                        // Trigger React events
+                        el.dispatchEvent(new Event("input", { bubbles: true }));
+                        el.dispatchEvent(new Event("change", { bubbles: true }));
+                        el.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+
+                        // Wait a bit for dropdown to render
+                        setTimeout(() => {
+                            // Try to find and click the matching option from the dropdown
+                            const listboxId = el.getAttribute("aria-controls") || el.getAttribute("aria-owns");
+                            let listbox = null;
+
+                            if (listboxId) {
+                                listbox = document.getElementById(listboxId);
+                            }
+
+                            // Fallback: look for common react-select patterns
+                            if (!listbox) {
+                                const elId = el.getAttribute("id");
+                                if (elId) {
+                                    // react-select pattern: react-select-{id}-listbox
+                                    listbox = document.getElementById(`react-select-${elId}-listbox`);
+                                }
+                            }
+
+                            // Fallback: find any visible listbox near this element
+                            if (!listbox) {
+                                const nearbyListbox = document.querySelector('[role="listbox"]:not([aria-hidden="true"])');
+                                if (nearbyListbox) {
+                                    listbox = nearbyListbox;
+                                }
+                            }
+
+                            if (listbox) {
+                                const optionElements = Array.from(listbox.querySelectorAll('[role="option"]'));
+                                console.log("ApplyAI: React select found options", {
+                                    targetRaw,
+                                    optionCount: optionElements.length
+                                });
+
+                                // Try exact match first
+                                const exactMatch = optionElements.find((opt) => {
+                                    const optText = normalizeText(opt.textContent || "");
+                                    return targets.some((t) => t === optText);
+                                });
+
+                                if (exactMatch) {
+                                    console.log("ApplyAI: React select exact match, clicking", {
+                                        targetRaw,
+                                        match: exactMatch.textContent
+                                    });
+                                    exactMatch.click();
+                                    return;
+                                }
+
+                                // Try contains match
+                                let best = null;
+                                let bestLen = 0;
+                                for (const opt of optionElements) {
+                                    const optText = normalizeText(opt.textContent || "");
+                                    for (const t of targets) {
+                                        if (!t) continue;
+                                        if (optText.includes(t) || t.includes(optText)) {
+                                            if (optText.length > bestLen) {
+                                                best = opt;
+                                                bestLen = optText.length;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (best) {
+                                    console.log("ApplyAI: React select contains match, clicking", {
+                                        targetRaw,
+                                        match: best.textContent
+                                    });
+                                    best.click();
+                                }
+                            } else {
+                                console.log("ApplyAI: React select listbox not found, value typed");
+                            }
+                        }, 300);
+
+                        return { applied: true, matchMethod: "react_select_typed" };
+                    } catch (err) {
+                        console.error("ApplyAI: React select error", err);
+                        return { applied: false, matchMethod: "react_select_error" };
+                    }
+                }
+
+                // Native select handling
                 const options = Array.from(el.options || []);
-                let match = options.find((opt) => opt.value === target);
-                if (!match) {
-                    match = options.find((opt) => (opt.textContent || "").trim().toLowerCase() === target.toLowerCase());
-                }
-                if (match) {
-                    el.value = match.value;
+                console.log("ApplyAI: native select options", {
+                    targetRaw,
+                    targets,
+                    optionCount: options.length
+                });
+                const exactMatch = options.find((opt) => {
+                    const optValue = normalizeText(opt.value);
+                    const optText = normalizeText(opt.textContent || "");
+                    return targets.some((t) => t === optValue || t === optText);
+                });
+                if (exactMatch) {
+                    console.log("ApplyAI: native select exact match", {
+                        targetRaw,
+                        match: exactMatch.value
+                    });
+                    el.value = exactMatch.value;
                     dispatchEvents(el);
-                    return true;
+                    return { applied: true, matchMethod: "exact" };
                 }
-                return false;
+
+                let best = null;
+                let bestLen = 0;
+                for (const opt of options) {
+                    const optValue = normalizeText(opt.value);
+                    const optText = normalizeText(opt.textContent || "");
+                    for (const t of targets) {
+                        if (!t) continue;
+                        const valueMatch = optValue && (optValue.includes(t) || t.includes(optValue));
+                        const textMatch = optText && (optText.includes(t) || t.includes(optText));
+                        if (valueMatch || textMatch) {
+                            const candLen = Math.max(optValue.length, optText.length);
+                            if (candLen > bestLen) {
+                                best = opt;
+                                bestLen = candLen;
+                            }
+                        }
+                    }
+                }
+
+                if (best) {
+                    console.log("ApplyAI: native select contains match", {
+                        targetRaw,
+                        match: best.value
+                    });
+                    el.value = best.value;
+                    dispatchEvents(el);
+                    return { applied: true, matchMethod: "contains" };
+                }
+
+                console.log("ApplyAI: select no match", { targetRaw });
+                return { applied: false, matchMethod: "no_match" };
             };
 
             const fillTextInput = (el, value) => {
@@ -98,6 +277,11 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                 if (tag === "input" && (el.getAttribute("type") || "").toLowerCase() === "file") {
                     return false;
                 }
+                console.log("ApplyAI: fillTextInput", {
+                    id: el.getAttribute("id"),
+                    name: el.getAttribute("name"),
+                    value
+                });
                 el.value = typeof value === "string" ? value : JSON.stringify(value);
                 dispatchEvents(el);
                 return true;
@@ -110,6 +294,10 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                 for (const node of nodes) {
                     const nodeValue = (node.value || "").trim().toLowerCase();
                     if (nodeValue && nodeValue === target) {
+                        console.log("ApplyAI: fillRadioGroup match", {
+                            target,
+                            nodeValue
+                        });
                         node.checked = true;
                         dispatchEvents(node);
                         matched = true;
@@ -127,6 +315,10 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                     for (const node of nodes) {
                         const nodeValue = (node.value || "").trim().toLowerCase();
                         const shouldCheck = normalized.includes(nodeValue);
+                        console.log("ApplyAI: fillCheckboxGroup array", {
+                            nodeValue,
+                            shouldCheck
+                        });
                         node.checked = shouldCheck;
                         dispatchEvents(node);
                         changed = changed || shouldCheck;
@@ -135,6 +327,10 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                 }
                 const shouldCheck = toBoolean(value);
                 for (const node of nodes) {
+                    console.log("ApplyAI: fillCheckboxGroup boolean", {
+                        nodeValue: (node.value || "").trim(),
+                        shouldCheck
+                    });
                     node.checked = shouldCheck;
                     dispatchEvents(node);
                 }
@@ -144,16 +340,35 @@ async function applyAutofillPlanToTab(tabId, planJson) {
             let filled = 0;
             let skipped = 0;
             const errors = [];
+            const debug = [];
 
             const fields = Array.isArray(plan?.fields) ? plan.fields : [];
             for (const field of fields) {
                 if (field?.action !== "autofill") {
+                    debug.push({
+                        question_signature: field?.question_signature || null,
+                        action: field?.action || null,
+                        selector: field?.selector || null,
+                        input_type: field?.input_type || null,
+                        value: field?.value ?? null,
+                        applied: false,
+                        reason: "action_not_autofill"
+                    });
                     skipped += 1;
                     continue;
                 }
 
                 const selector = field?.selector;
                 if (!selector) {
+                    debug.push({
+                        question_signature: field?.question_signature || null,
+                        action: field?.action || null,
+                        selector: field?.selector || null,
+                        input_type: field?.input_type || null,
+                        value: field?.value ?? null,
+                        applied: false,
+                        reason: "missing_selector"
+                    });
                     skipped += 1;
                     continue;
                 }
@@ -169,6 +384,16 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                 }
 
                 if (!nodes.length) {
+                    console.log("ApplyAI: no nodes for selector", selector);
+                    debug.push({
+                        question_signature: field?.question_signature || null,
+                        action: field?.action || null,
+                        selector,
+                        input_type: field?.input_type || null,
+                        value: field?.value ?? null,
+                        applied: false,
+                        reason: "no_nodes_found"
+                    });
                     skipped += 1;
                     continue;
                 }
@@ -178,8 +403,16 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                     const value = field?.value;
                     let applied = false;
 
+                    let matchMethod = null;
                     if (inputType === "select") {
-                        applied = selectOption(nodes[0], value);
+                        const result = selectOption(nodes[0], value);
+                        applied = result.applied;
+                        matchMethod = result.matchMethod;
+                        console.log("ApplyAI: select apply result", {
+                            selector,
+                            applied,
+                            matchMethod
+                        });
                     } else if (inputType === "radio") {
                         applied = fillRadioGroup(nodes, value);
                     } else if (inputType === "checkbox") {
@@ -193,18 +426,36 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                     } else {
                         skipped += 1;
                     }
+                    debug.push({
+                        question_signature: field?.question_signature || null,
+                        action: field?.action || null,
+                        selector,
+                        input_type: inputType || null,
+                        value: value ?? null,
+                        applied,
+                        reason: applied ? null : `apply_failed${matchMethod ? `:${matchMethod}` : ""}`
+                    });
                 } catch (err) {
                     errors.push(String(err?.message || err));
+                    debug.push({
+                        question_signature: field?.question_signature || null,
+                        action: field?.action || null,
+                        selector,
+                        input_type: field?.input_type || null,
+                        value: field?.value ?? null,
+                        applied: false,
+                        reason: `error:${String(err?.message || err)}`
+                    });
                     skipped += 1;
                 }
             }
 
-            return { filled, skipped, errors };
+            return { filled, skipped, errors, debug };
         },
         args: [planJson]
     });
 
-    return result || { filled: 0, skipped: 0, errors: [] };
+    return result || { filled: 0, skipped: 0, errors: [], debug: [] };
 }
 
 /**
@@ -380,9 +631,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     });
                 };
 
+                console.log("ApplyAI: autofill plan request received", message);
                 progress("starting");
 
                 const { extensionToken, lastIngest } = await storageGet(["extensionToken", "lastIngest"]);
+                console.log("ApplyAI: storage state", {
+                    hasToken: Boolean(extensionToken),
+                    lastIngest
+                });
                 if (!extensionToken) {
                     sendResponse({ ok: false, error: "Not connected. Please connect first." });
                     return;
@@ -393,6 +649,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     sendResponse({ ok: false, error: "Missing job application ID. Extract a job description first." });
                     return;
                 }
+                console.log("ApplyAI: jobApplicationId", jobApplicationId);
 
                 const tab = await getActiveTab();
                 if (!tab?.id) {
@@ -401,6 +658,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 }
 
                 const tabUrl = tab.url || "";
+                console.log("ApplyAI: active tab", { tabId: tab.id, tabUrl });
                 if (isRestrictedUrl(tabUrl)) {
                     sendResponse({ ok: false, error: "Cannot access this page." });
                     return;
@@ -411,6 +669,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 let { url, dom_html } = await extractDomHtmlFromTab(tab.id);
                 if (!url) url = tabUrl;
                 if (!dom_html) dom_html = "";
+                console.log("ApplyAI: DOM extracted", {
+                    url,
+                    domLength: dom_html.length
+                });
 
                 const MAX_HTML_CHARS = 2_500_000;
                 if (dom_html.length > MAX_HTML_CHARS) {
@@ -432,6 +694,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         dom_html
                     })
                 });
+                console.log("ApplyAI: plan response status", planRes.status);
 
                 if (planRes.status === 401) {
                     await storageSet({ extensionToken: null });
@@ -447,6 +710,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                 const planData = await planRes.json().catch(() => ({}));
                 const planJson = planData?.plan_json;
+                const planFields = Array.isArray(planJson?.fields) ? planJson.fields : [];
+                const actionCounts = planFields.reduce(
+                    (acc, field) => {
+                        const action = field?.action || "unknown";
+                        acc[action] = (acc[action] || 0) + 1;
+                        return acc;
+                    },
+                    {}
+                );
+                console.log("ApplyAI: plan payload", {
+                    run_id: planData?.run_id || null,
+                    status: planData?.status || null,
+                    totalFields: planFields.length,
+                    actionCounts,
+                    plan_summary: planData?.plan_summary || null
+                });
                 if (!planJson) {
                     sendResponse({ ok: false, error: "No autofill plan returned." });
                     return;
@@ -455,6 +734,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 progress("autofilling");
 
                 const applyResult = await applyAutofillPlanToTab(tab.id, planJson);
+                console.log("ApplyAI autofill result:", applyResult);
+                if (applyResult?.debug) {
+                    console.log("ApplyAI autofill debug:", applyResult.debug);
+                }
 
                 chrome.runtime.sendMessage(
                     {

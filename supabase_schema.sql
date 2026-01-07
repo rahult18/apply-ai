@@ -35,7 +35,7 @@ CREATE TABLE public.autofill_runs (
   dom_captured_at timestamp with time zone DEFAULT now(),
   plan_json jsonb,
   plan_summary jsonb,
-  status text NOT NULL DEFAULT 'planned'::text CHECK (status = ANY (ARRAY['planned'::text, 'running'::text, 'needs_user'::text, 'failed'::text, 'submitted'::text, 'cancelled'::text])),
+  status text NOT NULL DEFAULT 'planned'::text CHECK (status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'submitted'::text])),
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   dom_html_hash text,

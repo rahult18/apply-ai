@@ -171,6 +171,34 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
         
+        # Normalize URL to prevent duplicates from tracking params, trailing slashes, etc.
+        normalized_url = normalize_url(body.job_link)
+
+        # Check if job application already exists for this user and normalized URL
+        # Do this BEFORE the expensive LLM extraction call
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, job_title, company, url FROM job_applications WHERE user_id = %s AND normalized_url = %s LIMIT 1",
+                (user_id, normalized_url)
+            )
+            existing_job = cursor.fetchone()
+
+            if existing_job:
+                # Job application already exists - return existing data without LLM call
+                job_application_id = existing_job[0]
+                job_title = existing_job[1]
+                company = existing_job[2]
+                url = existing_job[3]
+                logger.info(f"Job application already exists with id={job_application_id}. Returning existing data.")
+
+                return {
+                    "job_application_id": job_application_id,
+                    "url": url,
+                    "job_title": job_title,
+                    "company": company
+                }
+
+        # Job doesn't exist - proceed with extraction
         if body.dom_html:
             logger.info(f"Successfully fetched the content from the DOM!")
             cleaned_content = clean_content(body.dom_html)
@@ -187,24 +215,22 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
                     jd_dom_html = content
                     logger.info(f"Successfully fetched the content from the URL!")
                     cleaned_content = clean_content(content)
-        
+
+        # Extract JD using LLM
         jd = extract_jd(cleaned_content, llm, body.job_link)
         logger.info(f"Successfully extracted the job description!")
-        
-        # Normalize URL to prevent duplicates from tracking params, trailing slashes, etc.
-        normalized_url = normalize_url(body.job_link)
+
         job_site_type = infer_job_site_type(body.job_link)
 
-        # write the JD to DB: public.job_applications table
+        # Create new job application
         with supabase.db_connection.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship, jd_dom_html) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, job_site_type, jd.open_to_visa_sponsorship, jd_dom_html)
             )
-            # fetching the inserted job_application id
             job_application_id = cursor.fetchone()[0]
             supabase.db_connection.commit()
-        logger.info(f"Successfully wrote to the DB!")
+            logger.info(f"Successfully created new job application in DB!")
 
         return {
             "job_application_id": job_application_id,
@@ -257,12 +283,14 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
                 plan_json = result[2]
                 plan_summary = result[3]
 
-                return AutofillPlanResponse(
+                response = AutofillPlanResponse(
                     run_id=autofill_run_id,
                     status=status,
                     plan_json=plan_json,
                     plan_summary=plan_summary
                 )
+                logger.info("Autofill plan response: %s", json.dumps(response.model_dump(), ensure_ascii=False))
+                return response
         
         # If not, create a new autofill plan
         
@@ -341,12 +369,14 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
         )
         
         # return the autofill plan response
-        return AutofillPlanResponse(
+        response = AutofillPlanResponse(
             run_id=autofill_agent_input.run_id,
             status=autofill_agent_output.status,
             plan_json=autofill_agent_output.plan_json,
             plan_summary=autofill_agent_output.plan_summary
         )
+        logger.info("Autofill plan response: %s", json.dumps(response.model_dump(), ensure_ascii=False))
+        return response
 
     except HTTPException:
         raise

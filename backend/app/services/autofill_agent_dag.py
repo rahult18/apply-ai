@@ -11,6 +11,7 @@ from typing import TypedDict, List, Dict, Any, Optional
 from app.services.llm import LLM
 from app.services.supabase import Supabase
 import logging
+import re
 import json
 
 logging.basicConfig(level=logging.INFO)
@@ -77,6 +78,12 @@ class DAG():
 
             form_fields = extract_form_fields_from_dom_html(dom_html)
             logger.info(f"Extracted {len(form_fields)} form fields.")
+            if form_fields:
+                field_labels = [
+                    f"{f.get('question_signature')}|{f.get('label')}"
+                    for f in form_fields
+                ]
+                logger.info("Extracted form fields: %s", field_labels)
             logger.debug("Extracted form fields: %s", form_fields)
             return {"form_fields": form_fields}
         except Exception as e:
@@ -138,7 +145,7 @@ class DAG():
                 "job_site_type": input_data.get("job_site_type"),
             }
 
-            # Keep resume_profile minimal (summary + skills). Avoid huge dumps for now.
+            # Send full resume context to improve answer quality.
             resume_profile = input_data.get("resume_profile")
             resume_ctx = None
             try:
@@ -148,10 +155,7 @@ class DAG():
                         rp = resume_profile.model_dump()
                     else:
                         rp = resume_profile
-                    resume_ctx = {
-                        "summary": rp.get("summary"),
-                        "skills": rp.get("skills"),
-                    }
+                    resume_ctx = rp
             except Exception:
                 resume_ctx = None
 
@@ -172,7 +176,8 @@ class DAG():
                 "rules": [
                     "Return JSON only, matching the provided JSON schema.",
                     "Use user_ctx for identity/contact/demographics when applicable.",
-                    "For select/radio/checkbox: return the exact option text when options are provided; otherwise suggest a short best guess.",
+                    "For select/radio/checkbox: when options are provided, return one exact option string from the list (no new values).",
+                    "If options are provided and none apply, set action='suggest' and value=null.",
                     "If you are not confident, set action='suggest' or 'skip' with low confidence.",
                     "Do not invent personally sensitive info. If missing, use action='suggest' and value=null.",
                 ],
@@ -227,6 +232,34 @@ class DAG():
 
             answers_out: Dict[str, FormFieldAnswer] = {}
 
+            def _norm_option_text(text: Any) -> str:
+                text = "" if text is None else str(text)
+                text = text.strip().lower()
+                text = re.sub(r"\s+", " ", text)
+                text = re.sub(r"[^a-z0-9 ]+", "", text)
+                return text
+
+            def _match_option(value: Any, options: List[str]) -> Optional[str]:
+                if value is None:
+                    return None
+                target = _norm_option_text(value)
+                if not target:
+                    return None
+                for opt in options:
+                    if _norm_option_text(opt) == target:
+                        return opt
+                best = None
+                best_len = 0
+                for opt in options:
+                    norm_opt = _norm_option_text(opt)
+                    if not norm_opt:
+                        continue
+                    if target in norm_opt or norm_opt in target:
+                        if len(norm_opt) > best_len:
+                            best = opt
+                            best_len = len(norm_opt)
+                return best
+
             # Normalize to your FormFieldAnswer schema
             for f in form_fields:
                 sig = f.get("question_signature")
@@ -245,14 +278,41 @@ class DAG():
                 conf = float(item.confidence or 0.0)
                 conf = max(0.0, min(1.0, conf))
 
+                input_type = f.get("input_type")
+                value = item.value
+                options = f.get("options") or []
+                if input_type in {"select", "radio", "checkbox"} and options:
+                    match = _match_option(value, options)
+                    if match is not None:
+                        value = match
+
                 answers_out[sig] = {
-                    "value": item.value,
+                    "value": value,
                     "source": item.source or "llm",
                     "confidence": conf,
                     "action": item.action,
                 }
 
             logger.info("Generated answers for %d fields.", len(answers_out))
+            logger.info("Generated answers for fields: %s", list(answers_out.keys()))
+            action_counts = {"autofill": 0, "suggest": 0, "skip": 0}
+            for ans in answers_out.values():
+                action = ans.get("action")
+                if action in action_counts:
+                    action_counts[action] += 1
+            logger.info("Answer action counts: %s", action_counts)
+            logger.info(
+                "Autofill fields: %s",
+                [sig for sig, ans in answers_out.items() if ans.get("action") == "autofill"],
+            )
+            logger.info(
+                "Suggested fields: %s",
+                [sig for sig, ans in answers_out.items() if ans.get("action") == "suggest"],
+            )
+            logger.info(
+                "Skipped fields: %s",
+                [sig for sig, ans in answers_out.items() if ans.get("action") == "skip"],
+            )
             logger.debug("Generated answers (normalized): %s", json.dumps(answers_out, ensure_ascii=False))
 
             return {"answers": answers_out}
@@ -287,8 +347,13 @@ class DAG():
                     "UPDATE public.autofill_runs SET plan_json=%s, plan_summary=%s, status=%s, updated_at=NOW() WHERE id=%s",
                     (json.dumps(plan_json), json.dumps(plan_summary), status, run_id),
                 )
+                if cursor.rowcount == 0:
+                    logger.error("No autofill_run row updated for run_id=%s", run_id)
+                else:
+                    logger.info("Updated autofill_run row for run_id=%s", run_id)
                 supabase.db_connection.commit()
         except Exception as e:
+            logger.error("Failed to update autofill_run for run_id=%s: %s", run_id, str(e))
             errors.append(f"Error in assemble_autofill_plan_node: {str(e)}")
             status = "failed"
 
