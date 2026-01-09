@@ -86,10 +86,27 @@ class JobsIngestRequestBody(BaseModel):
     job_link: str
     dom_html: Optional[str] = None
 
+class ExtractedFormField(BaseModel):
+    """Field extracted by browser extension's DOMParser"""
+    type: str  # "input", "textarea", "select", "combobox", etc.
+    inputType: str  # "text", "email", "tel", "file", etc.
+    name: Optional[str] = None
+    id: Optional[str] = None
+    label: Optional[str] = None
+    placeholder: Optional[str] = None
+    required: bool = False
+    value: Optional[str] = None
+    selector: str
+    autocomplete: Optional[str] = None
+    isCombobox: Optional[bool] = False
+    options: list[dict[str, str]] = []  # [{value: str, label: str}]
+    maxLength: Optional[int] = None
+
 class AutofillPlanRequest(BaseModel):
     job_application_id: str
     page_url: str
-    dom_html: str
+    dom_html: str  # Keep for storage/debugging
+    extracted_fields: list[ExtractedFormField]  # REQUIRED - extracted by browser
 
 class AutofillPlanResponse(BaseModel):
     run_id: str
@@ -119,7 +136,8 @@ class AutofillAgentInput(BaseModel):
 
     #application page details
     page_url: str
-    dom_html: str
+    dom_html: str  # Keep for storage/debugging
+    extracted_fields: Optional[list[ExtractedFormField]] = None  # Extracted by browser
     
     #job details
     job_title: Optional[str] = None

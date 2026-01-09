@@ -10,11 +10,19 @@ This folder contains the browser extension for the Application Tracker project. 
   - Permissions: `storage`, `tabs`, `activeTab`, `scripting`
   - Host permissions: `http://localhost:3000/*`, `http://localhost:8000/*`
 
-- `background.js`: The main service worker running in the background (~796 lines). Key functionality:
+- `background.js`: The main service worker running in the background (~1111 lines). Key functionality:
   - **Storage helpers**: `storageGet()` and `storageSet()` for Chrome local storage
   - **Install ID management**: `ensureInstallId()` generates and stores a unique installation UUID
   - **Tab interaction**: `getActiveTab()` gets the current active tab
   - **DOM extraction**: `extractDomHtmlFromTab(tabId)` injects script into tab to extract full DOM HTML and URL
+  - **Form field extraction**: `extractFormFieldsFromTab(tabId)` extracts structured form fields using JavaScript DOMParser:
+    - Detects inputs, textareas, selects, comboboxes (React Select), radio groups, and checkbox groups
+    - Generates CSS selectors for each field (#id or [name="..."])
+    - Extracts labels via multiple strategies (for attribute, parent label, aria-label, placeholder)
+    - Determines if fields are required (required attribute, aria-required, asterisk in label)
+    - Extracts options from native selects and React Select components (when expanded)
+    - Filters out React Select internal validation inputs (.requiredInput, hidden inputs in .select__container)
+    - Returns structured JSON: type, inputType, name, id, label, placeholder, required, selector, options, autocomplete, isCombobox
   - **Autofill application**: `applyAutofillPlanToTab(tabId, planJson)` applies autofill plans with sophisticated form filling:
     - Supports text inputs, native selects, React Select components, radio groups, and checkbox groups
     - React Select detection via `role="combobox"` or `aria-autocomplete="list"`
@@ -41,10 +49,13 @@ This folder contains the browser extension for the Application Tracker project. 
   3. `APPLYAI_AUTOFILL_PLAN`: Autofill generation and application
      - Validates token, retrieves job_application_id from message or lastIngest
      - Extracts DOM HTML from active tab (enforces 2.5MB limit)
-     - POSTs to `/extension/autofill/plan` with `job_application_id`, `page_url`, `dom_html`
-     - Receives `plan_json` with fields array (each field has: action, selector, input_type, value, question_signature)
+     - **Extracts structured form fields** using `extractFormFieldsFromTab()` (JavaScript DOMParser)
+     - POSTs to `/extension/autofill/plan` with `job_application_id`, `page_url`, `dom_html`, and `extracted_fields`
+     - Backend receives pre-extracted fields (no server-side parsing needed)
+     - Backend enriches country fields automatically (adds 196 countries to select fields with "country", "nationality", or "citizenship" keywords)
+     - Receives `plan_json` with fields array (each field has: action, selector, input_type, value, question_signature, options)
      - Applies plan to page using `applyAutofillPlanToTab()`
-     - Sends progress messages: `APPLYAI_AUTOFILL_PROGRESS` (stages: starting, extracting_dom, planning, autofilling)
+     - Sends progress messages: `APPLYAI_AUTOFILL_PROGRESS` (stages: starting, extracting_dom, extracting_fields, planning, autofilling)
      - Sends result: `APPLYAI_AUTOFILL_RESULT` (includes ok, run_id, plan_summary, filled, skipped, errors)
 
 - `content.js`: Content script bridge (~18 lines)
@@ -121,17 +132,32 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 1. User navigates to job application form page
 2. User clicks "Generate Autofill" in popup (after extracting a job)
 3. Background script extracts DOM HTML from active tab
-4. DOM sent to `/extension/autofill/plan` with job_application_id
-5. Backend generates autofill plan (field selectors, values, actions)
-6. Plan applied to page via `applyAutofillPlanToTab()`:
+4. **Background script extracts structured form fields** using JavaScript DOMParser:
+   - Identifies all form inputs, textareas, selects, and React Select components
+   - Generates CSS selectors and extracts labels, options, and metadata
+   - Filters out React Select internal validation inputs
+5. Both DOM HTML and structured fields sent to `/extension/autofill/plan` with job_application_id
+6. Backend processes pre-extracted fields:
+   - Converts JavaScript field format to internal FormField format
+   - Enriches country/nationality fields with standard country list (196 countries)
+   - Generates answers using LLM based on user profile, resume, and job requirements
+7. Backend generates autofill plan (field selectors, values, actions, confidence scores)
+8. Plan applied to page via `applyAutofillPlanToTab()`:
    - Identifies form fields by CSS selectors
    - Handles various input types (text, select, radio, checkbox, React Select)
    - Fills values and triggers appropriate events
-7. Popup displays filled field count
+9. Popup displays filled field count
 
 ## Key Technical Features
 - **Secure Authentication**: One-time code exchange for JWT tokens, stored in chrome.storage.local
 - **DOM Extraction**: On-demand script injection to capture full page HTML (with 2.5MB size limit)
+- **Intelligent Form Field Extraction**: JavaScript DOMParser-based extraction in browser context
+  - Parses live DOM (handles React and JavaScript-rendered forms)
+  - Multi-strategy label detection (for attribute, parent labels, aria-label, placeholder)
+  - Required field detection (required attribute, aria-required, asterisk in labels)
+  - React Select component detection and option extraction
+  - Filters out framework internal inputs (React Select validation inputs)
+  - Country field enrichment (backend automatically adds 196 countries to country/nationality fields)
 - **Smart Form Filling**:
   - React framework compatibility via native property setters and proper event triggering
   - React Select component detection and interaction
@@ -146,6 +172,10 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 - `GET /extension/me`: Validate token and get user info
 - `POST /extension/jobs/ingest`: Submit job posting URL and DOM for extraction
 - `POST /extension/autofill/plan`: Generate autofill plan for application form
+  - **New**: Accepts `extracted_fields` (array of structured field objects extracted by extension)
+  - Backend converts JS field format to internal FormField format
+  - Backend enriches country fields automatically
+  - Returns autofill plan with field values, actions, and confidence scores
 
 ## Frontend Integration
 - `/extension/connect`: Connection page that generates one-time codes

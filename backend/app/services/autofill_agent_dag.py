@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '''..
 
 from langgraph.graph import StateGraph, START, END
 from app.models import AutofillAgentInput, AutofillAgentOutput
-from app.dag_utils import FormField, FormFieldAnswer, AutofillPlanJSON, RunStatus, AutofillPlanSummary, extract_form_fields_from_dom_html, build_autofill_plan, summarize_autofill_plan, LLMAnswersResponse, LLMAnswerItem
+from app.dag_utils import FormField, FormFieldAnswer, AutofillPlanJSON, RunStatus, AutofillPlanSummary, build_autofill_plan, summarize_autofill_plan, LLMAnswersResponse
 from typing import TypedDict, List, Dict, Any, Optional
 from app.services.llm import LLM
 from app.services.supabase import Supabase
@@ -64,28 +64,34 @@ class DAG():
 
     def extract_form_fields_node(self, state: AutofillAgentState) -> dict:
         """
-        Extracts form fields from the DOM HTML.
+        Converts pre-extracted fields from JavaScript DOMParser to FormField format.
         """
         logger.debug("Executing extract_form_fields_node")
         try:
-            dom_html = state["input_data"].get("dom_html")
-            if not dom_html:
-                logger.warning("extract_form_fields_node: input.dom_html is empty")
+            input_data = state.get("input_data", {})
+            extracted_fields = input_data.get("extracted_fields")
+
+            if not extracted_fields:
+                logger.error("extract_form_fields_node: no extracted_fields provided")
                 return {
-                    "errors": state.get("errors", []) + ["extract_form_fields_node: input.dom_html is empty"],
+                    "errors": state.get("errors", []) + ["No extracted_fields provided"],
                     "form_fields": []
                 }
 
-            form_fields = extract_form_fields_from_dom_html(dom_html)
-            logger.info(f"Extracted {len(form_fields)} form fields.")
+            logger.info("Converting pre-extracted fields from extension")
+            from app.dag_utils import convert_js_fields_to_form_fields
+            form_fields = convert_js_fields_to_form_fields(extracted_fields)
+            logger.info(f"Converted {len(form_fields)} pre-extracted fields")
+
             if form_fields:
                 field_labels = [
                     f"{f.get('question_signature')}|{f.get('label')}"
                     for f in form_fields
                 ]
-                logger.info("Extracted form fields: %s", field_labels)
-            logger.debug("Extracted form fields: %s", form_fields)
+                logger.info("Form fields: %s", field_labels)
+
             return {"form_fields": form_fields}
+
         except Exception as e:
             logger.error(f"Error in extract_form_fields_node: {str(e)}", exc_info=True)
             return {"errors": state.get("errors", []) + [f"Error in extract_form_fields_node: {str(e)}"]}

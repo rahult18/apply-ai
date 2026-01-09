@@ -17,10 +17,11 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `JobsIngestRequestBody`: Used for job ingestion with `job_link` and optional `dom_html`.
     - `EducationEntry`, `ExperienceEntry`, `ProjectEntry`, `CertificationEntry`: Structured models for resume components.
     - `ExtractedResumeModel`: Complete resume data model including skills, summary, experience, education, certifications, and projects.
-    - `AutofillPlanRequest`: Request model for autofill plan generation with `job_application_id`, `page_url`, and `dom_html`.
+    - `ExtractedFormField`: Model for form fields extracted by the browser extension using JavaScript DOMParser. Contains `type`, `inputType`, `name`, `id`, `label`, `placeholder`, `required`, `value`, `selector`, `autocomplete`, `isCombobox`, `options`, and `maxLength`.
+    - `AutofillPlanRequest`: Request model for autofill plan generation with `job_application_id`, `page_url`, `dom_html`, and **`extracted_fields`** (list of ExtractedFormField objects pre-extracted by extension).
     - `AutofillPlanResponse`: Response model containing `run_id`, `status`, `plan_json`, and `plan_summary`.
     - `AutofillEventRequest`, `AutofillFeedbackRequest`, `AutofillSubmitRequest`: Models for autofill telemetry and feedback.
-    - `AutofillAgentInput`: Comprehensive input model for the autofill agent DAG, containing job details, user profile, resume data, and DOM HTML.
+    - `AutofillAgentInput`: Comprehensive input model for the autofill agent DAG, containing job details, user profile, resume data, DOM HTML, and **`extracted_fields`**.
     - `AutofillAgentOutput`: Output model from the autofill agent with status and plan information.
   - `utils.py`: Contains utility functions:
     - `extract_jd`: Extracts structured job description data from raw HTML content using the LLM service.
@@ -31,11 +32,11 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `check_if_job_application_belongs_to_user`: Verifies that a job application ID belongs to a specific user.
     - `check_if_run_id_belongs_to_user`: Verifies that an autofill run ID belongs to a specific user.
   - `dag_utils.py`: Contains DAG-related utilities for autofill agent:
-    - Type definitions: `FormField`, `FormFieldAnswer`, `PlanField`, `AutofillPlanJSON`, `AutofillPlanSummary`, `LLMAnswerItem`, `LLMAnswersResponse`.
-    - `extract_form_fields_from_dom_html`: Parses DOM HTML to extract form fields, handles native inputs, textareas, selects, and ARIA combobox widgets (React-Select).
+    - Type definitions: `FormField`, `FormFieldAnswer`, `PlanField`, `AutofillPlanJSON`, `AutofillPlanSummary`, `LLMAnswersResponse`.
+    - `convert_js_fields_to_form_fields`: Converts pre-extracted form fields from browser extension's JavaScript DOMParser to internal FormField format. Maps JS field properties (type, inputType, name, id, label, selector, options) to Python FormField structure.
+    - `_enrich_country_fields`: Automatically enriches select fields containing "country", "nationality", or "citizenship" keywords with a standard list of 196 countries (useful when React Select components have empty options in static DOM).
     - `build_autofill_plan`: Builds an autofill plan JSON from form fields and answers.
     - `summarize_autofill_plan`: Summarizes an autofill plan with counts of autofilled, suggested, and skipped fields.
-    - Helper functions for label extraction, requirement detection, selector generation, and option matching.
   - `routes/`: API route handlers.
     - `auth.py`: Handles user authentication:
       - `POST /auth/signup`: Registers a new user with email and password, stores user in Supabase, and returns a session token or a message for email confirmation.
@@ -50,7 +51,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token specifically for the browser extension.
       - `GET /extension/me`: Retrieves user information (email, id, full_name) using the extension's JWT token.
       - `POST /extension/jobs/ingest`: Ingests a job application either by scraping a provided `job_link` or by extracting information from `dom_html` provided by the extension. It cleans the content, extracts structured data using the LLM service, normalizes the URL, infers job site type, and stores the job application in the `job_applications` table for the authenticated user.
-      - `POST /extension/autofill/plan`: Generates an autofill plan for a job application form. Checks for existing plans with matching DOM hash, or creates a new autofill run and invokes the DAG agent to extract form fields, generate answers using LLM with user/job/resume context, and assemble the autofill plan.
+      - `POST /extension/autofill/plan`: Generates an autofill plan for a job application form. Receives pre-extracted form fields from the browser extension (extracted using JavaScript DOMParser), checks for existing plans with matching DOM hash, or creates a new autofill run and invokes the DAG agent to convert fields to internal format, enrich country fields, generate answers using LLM with user/job/resume context, and assemble the autofill plan.
       - `POST /extension/autofill/event`: Logs autofill events (user interactions, errors, etc.) to the `autofill_events` table for telemetry.
       - `POST /extension/autofill/feedback`: Submits user feedback/corrections for autofill answers to the `autofill_feedback` table for model improvement.
       - `POST /extension/autofill/submit`: Marks an autofill run as 'submitted' and updates the corresponding job application status to 'applied'.
@@ -59,7 +60,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `supabase.py`: Provides a client for interacting with Supabase, including authentication and database operations using `psycopg2` for direct database connections.
     - `autofill_agent_dag.py`: Implements the autofill agent as a LangGraph DAG with four nodes:
       - `initialize_node`: Initializes the DAG state with input data.
-      - `extract_form_fields_node`: Extracts form fields from DOM HTML using `dag_utils.extract_form_fields_from_dom_html`.
+      - `extract_form_fields_node`: Converts pre-extracted fields from browser extension's JavaScript DOMParser to internal FormField format using `dag_utils.convert_js_fields_to_form_fields`. Automatically enriches country/nationality/citizenship fields with 196 standard countries.
       - `generate_answers_node`: Generates answers for form fields using Gemini 2.5 Flash with structured JSON output. Sends user context, job context, resume profile, and form field specifications to LLM. Performs option matching for select/radio/checkbox fields.
       - `assemble_autofill_plan_node`: Builds the final autofill plan JSON and summary, then updates the `autofill_runs` table in the database.
 
@@ -67,7 +68,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - **Authentication**: User signup, login, and user info managed via Supabase's authentication service. Extension authentication uses custom JWT tokens with one-time code exchange.
 - **Job Ingestion**: Utilizes Google Generative AI (Gemini 2.5 Flash) to extract structured job descriptions from raw HTML content, either fetched from a URL or provided directly by the browser extension. Includes URL normalization and job site type inference.
 - **Resume Parsing**: Parses uploaded PDF resumes using PyMuPDF (fitz) for text extraction and Gemini 2.5 Flash for structured data extraction. Updates user profile with parsed resume data (skills, experience, education, certifications, projects).
-- **Autofill Agent**: LangGraph-based DAG that extracts form fields from DOM HTML, generates contextual answers using LLM with user profile and resume data, and creates autofill plans. Supports telemetry, feedback collection, and submission tracking.
+- **Autofill Agent**: LangGraph-based DAG that receives pre-extracted form fields from the browser extension (extracted using JavaScript DOMParser in the actual browser environment), converts them to internal format, enriches country fields automatically, generates contextual answers using LLM with user profile and resume data, and creates autofill plans. Supports telemetry, feedback collection, and submission tracking.
 - **Supabase Integration**: Handles user management, profile storage, job application storage, resume storage, autofill runs, autofill events, and autofill feedback in Supabase. Direct `psycopg2` connections are used for database operations.
 - **Google Generative AI Integration**: Used for job description extraction, resume parsing, and autofill answer generation with structured JSON schema responses.
 

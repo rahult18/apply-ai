@@ -16,7 +16,6 @@ pymupdf
 langgraph
 langchain
 beautifulsoup4
-lxml
 tiktoken
 jsonschema
 tenacity

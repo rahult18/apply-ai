@@ -52,6 +52,312 @@ async function extractDomHtmlFromTab(tabId) {
     return result || { url: "", dom_html: "" };
 }
 
+async function extractFormFieldsFromTab(tabId) {
+    const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+            console.log("ApplyAI: extracting form fields from page");
+
+            // Helper: Find label for an input
+            function findLabelForInput(element) {
+                if (element.id) {
+                    const label = document.querySelector(`label[for="${element.id}"]`);
+                    if (label) return label.textContent.trim();
+                }
+
+                let parent = element.parentElement;
+                while (parent && parent.tagName !== 'BODY') {
+                    if (parent.tagName === 'LABEL') {
+                        return parent.textContent.trim();
+                    }
+                    parent = parent.parentElement;
+                }
+
+                const prevSibling = element.previousElementSibling;
+                if (prevSibling && prevSibling.tagName === 'LABEL') {
+                    return prevSibling.textContent.trim();
+                }
+
+                if (element.getAttribute('aria-label')) {
+                    return element.getAttribute('aria-label');
+                }
+
+                if (element.placeholder) {
+                    return element.placeholder;
+                }
+
+                return null;
+            }
+
+            // Helper: Generate CSS selector
+            function generateSelector(element) {
+                if (element.id) {
+                    // Use attribute selector if ID starts with digit (CSS can't parse #4012870007)
+                    if (/^\d/.test(element.id)) {
+                        return `[id="${element.id}"]`;
+                    }
+                    return `#${element.id}`;
+                }
+
+                if (element.name) {
+                    return `[name="${element.name}"]`;
+                }
+
+                const path = [];
+                let current = element;
+                while (current && current.tagName !== 'BODY') {
+                    let selector = current.tagName.toLowerCase();
+                    if (current.className) {
+                        const classes = current.className.split(' ').filter(c => c && !c.startsWith('css-'));
+                        if (classes.length > 0) {
+                            selector += `.${classes[0]}`;
+                        }
+                    }
+                    path.unshift(selector);
+                    current = current.parentElement;
+                }
+
+                return path.slice(-3).join(' > ');
+            }
+
+            // Helper: Check if field is required
+            function isRequired(element) {
+                if (element.required) return true;
+                if (element.getAttribute('aria-required') === 'true') return true;
+
+                const label = findLabelForInput(element);
+                if (label && label.includes('*')) return true;
+
+                return false;
+            }
+
+            // Helper: Extract options from select/combobox
+            function extractOptions(element) {
+                const options = [];
+
+                if (element.tagName === 'SELECT') {
+                    const optionElements = element.querySelectorAll('option');
+                    optionElements.forEach(opt => {
+                        if (opt.value) {
+                            options.push({
+                                value: opt.value,
+                                label: opt.textContent.trim()
+                            });
+                        }
+                    });
+                }
+
+                if (element.getAttribute('role') === 'combobox') {
+                    const listboxId = element.getAttribute('aria-controls');
+                    if (listboxId) {
+                        const listbox = document.getElementById(listboxId);
+                        if (listbox) {
+                            const optionElements = listbox.querySelectorAll('[role="option"]');
+                            optionElements.forEach(opt => {
+                                options.push({
+                                    value: opt.getAttribute('data-value') || opt.textContent.trim(),
+                                    label: opt.textContent.trim()
+                                });
+                            });
+                        }
+                    }
+                }
+
+                return options;
+            }
+
+            // Helper: Check if input should be skipped
+            function shouldSkipInput(input) {
+                if (input.className && input.className.includes('requiredInput')) {
+                    return true;
+                }
+
+                const selectContainer = input.closest('.select__container, .select-shell');
+                if (selectContainer && input.getAttribute('role') !== 'combobox') {
+                    return true;
+                }
+
+                if (!input.id && !input.name && !input.placeholder && input.getAttribute('role') !== 'combobox') {
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Main extraction function
+            function extractFormFields() {
+                const fields = [];
+
+                // Extract standard input fields
+                const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                inputs.forEach(input => {
+                    if (shouldSkipInput(input)) {
+                        return;
+                    }
+
+                    fields.push({
+                        type: 'input',
+                        inputType: input.type || 'text',
+                        name: input.name || null,
+                        id: input.id || null,
+                        label: findLabelForInput(input),
+                        placeholder: input.placeholder || null,
+                        required: isRequired(input),
+                        value: input.value || null,
+                        selector: generateSelector(input),
+                        autocomplete: input.getAttribute('autocomplete') || null
+                    });
+                });
+
+                // Extract textarea fields
+                const textareas = document.querySelectorAll('textarea');
+                textareas.forEach(textarea => {
+                    fields.push({
+                        type: 'textarea',
+                        inputType: 'textarea',
+                        name: textarea.name || null,
+                        id: textarea.id || null,
+                        label: findLabelForInput(textarea),
+                        placeholder: textarea.placeholder || null,
+                        required: isRequired(textarea),
+                        value: textarea.value || null,
+                        selector: generateSelector(textarea),
+                        maxLength: textarea.maxLength > 0 ? textarea.maxLength : null
+                    });
+                });
+
+                // Extract select fields
+                const selects = document.querySelectorAll('select');
+                selects.forEach(select => {
+                    fields.push({
+                        type: 'select',
+                        inputType: 'select',
+                        name: select.name || null,
+                        id: select.id || null,
+                        label: findLabelForInput(select),
+                        required: isRequired(select),
+                        value: select.value || null,
+                        selector: generateSelector(select),
+                        options: extractOptions(select)
+                    });
+                });
+
+                // Extract React Select / Combobox fields
+                const comboboxes = document.querySelectorAll('[role="combobox"]');
+                comboboxes.forEach(combobox => {
+                    if (combobox.tagName === 'INPUT') {
+                        const existingIndex = fields.findIndex(f => f.id === combobox.id);
+                        if (existingIndex >= 0) {
+                            fields[existingIndex].isCombobox = true;
+                            fields[existingIndex].options = extractOptions(combobox);
+                            return;
+                        }
+                    }
+
+                    fields.push({
+                        type: 'combobox',
+                        inputType: 'select',
+                        name: combobox.getAttribute('name') || null,
+                        id: combobox.id || null,
+                        label: findLabelForInput(combobox),
+                        placeholder: combobox.getAttribute('placeholder') || null,
+                        required: isRequired(combobox),
+                        selector: generateSelector(combobox),
+                        options: extractOptions(combobox),
+                        ariaLabel: combobox.getAttribute('aria-label') || null
+                    });
+                });
+
+                // Extract radio button groups
+                const radioInputs = document.querySelectorAll('input[type="radio"]');
+                const radioGroups = {};
+
+                radioInputs.forEach(radio => {
+                    const name = radio.name;
+                    if (!name) return;
+
+                    if (!radioGroups[name]) {
+                        radioGroups[name] = {
+                            type: 'radio',
+                            inputType: 'radio',
+                            name: name,
+                            label: findLabelForInput(radio) || name,
+                            required: isRequired(radio),
+                            options: [],
+                            selector: `input[name="${name}"]`
+                        };
+                    }
+
+                    radioGroups[name].options.push({
+                        value: radio.value,
+                        label: findLabelForInput(radio) || radio.value,
+                        id: radio.id,
+                        checked: radio.checked
+                    });
+                });
+
+                fields.push(...Object.values(radioGroups));
+
+                // Extract checkbox groups
+                const checkboxInputs = document.querySelectorAll('input[type="checkbox"]');
+                const checkboxGroups = {};
+
+                checkboxInputs.forEach(checkbox => {
+                    const name = checkbox.name;
+                    if (!name) {
+                        fields.push({
+                            type: 'checkbox',
+                            inputType: 'checkbox',
+                            name: name,
+                            id: checkbox.id || null,
+                            label: findLabelForInput(checkbox),
+                            required: isRequired(checkbox),
+                            value: checkbox.value,
+                            checked: checkbox.checked,
+                            selector: generateSelector(checkbox)
+                        });
+                        return;
+                    }
+
+                    if (!checkboxGroups[name]) {
+                        checkboxGroups[name] = {
+                            type: 'checkbox-group',
+                            inputType: 'checkbox',
+                            name: name,
+                            label: name,
+                            required: isRequired(checkbox),
+                            options: [],
+                            selector: `input[name="${name}"]`
+                        };
+                    }
+
+                    checkboxGroups[name].options.push({
+                        value: checkbox.value,
+                        label: findLabelForInput(checkbox) || checkbox.value,
+                        id: checkbox.id,
+                        checked: checkbox.checked
+                    });
+                });
+
+                fields.push(...Object.values(checkboxGroups));
+
+                return fields;
+            }
+
+            try {
+                const formFields = extractFormFields();
+                console.log("ApplyAI: extracted form fields", formFields.length);
+                return formFields;
+            } catch (e) {
+                console.error("ApplyAI: form field extraction error", e);
+                return [];
+            }
+        }
+    });
+
+    return result || [];
+}
+
 async function applyAutofillPlanToTab(tabId, planJson) {
     const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
@@ -383,6 +689,17 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                     if (node) nodes = [node];
                 }
 
+                // Fallback for numeric IDs that slipped through
+                if (!nodes.length && selector.startsWith('#')) {
+                    const id = selector.substring(1);
+                    // Try attribute selector format
+                    const fallbackNodes = document.querySelectorAll(`[id="${id}"]`);
+                    if (fallbackNodes.length > 0) {
+                        nodes = Array.from(fallbackNodes);
+                        console.log('ApplyAI: Used attribute selector fallback for numeric ID', id);
+                    }
+                }
+
                 if (!nodes.length) {
                     console.log("ApplyAI: no nodes for selector", selector);
                     debug.push({
@@ -680,6 +997,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     return;
                 }
 
+                progress("extracting_fields");
+
+                const formFields = await extractFormFieldsFromTab(tab.id);
+                console.log("ApplyAI: Form fields extracted", {
+                    fieldCount: formFields.length
+                });
+
+                if (!formFields || formFields.length === 0) {
+                    sendResponse({ ok: false, error: "No form fields found on this page." });
+                    return;
+                }
+
                 progress("planning");
 
                 const planRes = await fetch(`${API_BASE_URL}/extension/autofill/plan`, {
@@ -691,7 +1020,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     body: JSON.stringify({
                         job_application_id: jobApplicationId,
                         page_url: url,
-                        dom_html
+                        dom_html,
+                        extracted_fields: formFields
                     })
                 });
                 console.log("ApplyAI: plan response status", planRes.status);

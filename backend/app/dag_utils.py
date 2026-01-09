@@ -1,11 +1,44 @@
 from __future__ import annotations
-from typing import TypedDict, NotRequired, Optional, Literal, List, Dict, Any, Set, cast, Tuple
-from lxml import html as lxml_html
+from typing import TypedDict, NotRequired, Optional, Literal, List, Dict, Any, Set
 import logging
 from pydantic import BaseModel, Field
 
 
 logger = logging.getLogger(__name__)
+
+# Standard country list for enriching country fields
+STANDARD_COUNTRIES = [
+    "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda",
+    "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan", "Bahamas", "Bahrain",
+    "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan",
+    "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria",
+    "Burkina Faso", "Burundi", "Cabo Verde", "Cambodia", "Cameroon", "Canada",
+    "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros",
+    "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic", "Czechia",
+    "Denmark", "Djibouti", "Dominica", "Dominican Republic", "Ecuador", "Egypt",
+    "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia",
+    "Fiji", "Finland", "France", "Gabon", "Gambia", "Georgia", "Germany", "Ghana",
+    "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana", "Haiti",
+    "Honduras", "Hungary", "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland",
+    "Israel", "Italy", "Jamaica", "Japan", "Jordan", "Kazakhstan", "Kenya", "Kiribati",
+    "Kosovo", "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia",
+    "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Madagascar", "Malawi",
+    "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius",
+    "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco",
+    "Mozambique", "Myanmar", "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand",
+    "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia", "Norway", "Oman",
+    "Pakistan", "Palau", "Palestine", "Panama", "Papua New Guinea", "Paraguay", "Peru",
+    "Philippines", "Poland", "Portugal", "Qatar", "Romania", "Russia", "Rwanda",
+    "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa",
+    "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia",
+    "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands",
+    "Somalia", "South Africa", "South Korea", "South Sudan", "Spain", "Sri Lanka",
+    "Sudan", "Suriname", "Sweden", "Switzerland", "Syria", "Taiwan", "Tajikistan",
+    "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago",
+    "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine",
+    "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan",
+    "Vanuatu", "Vatican City", "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe"
+]
 
 # enums for various state variables
 InputType = Literal["text", "textarea", "select", "radio", "checkbox", "date", "number", "email", "password", "file", "tel", "url", "hidden", "unknown"]
@@ -75,58 +108,92 @@ class LLMAnswersResponse(BaseModel):
 
 # Helper functions
 
-def extract_form_fields_from_dom_html(dom_html: str) -> List[FormField]:
+def convert_js_fields_to_form_fields(js_fields: List[Dict[str, Any]]) -> List[FormField]:
     """
-    Deterministically parse DOM HTML and return FormField[].
-    - Handles native input/textarea/select
-    - Treats ARIA combobox widgets (React-Select) as input_type="select"
-    - options only extracted for native <select> (static HTML)
+    Convert JavaScript DOMParser extracted fields to FormField format.
+
+    Args:
+        js_fields: List of field objects from browser extension
+
+    Returns:
+        List[FormField] compatible with existing DAG pipeline
     """
-    doc = lxml_html.fromstring(dom_html)
-    root = _pick_form_scope(doc)
-    logger.info("Form scope selected: %s", root.tag)
-
-    candidates = root.cssselect("input, textarea, select")
-    logger.info("Found %d candidate form elements.", len(candidates))
-
     out: List[FormField] = []
     seen: Set[str] = set()
-    fallback_idx = 0
 
-    for el in candidates:
-        logger.debug("Processing element: %s", lxml_html.tostring(el, pretty_print=True).decode('utf-8').strip())
-        if _should_skip_control(el):
-            logger.debug("Skipping control element.")
-            continue
+    for idx, js_field in enumerate(js_fields):
+        # Generate question_signature
+        sig = js_field.get("id") or js_field.get("name")
+        if not sig:
+            # Fallback: use selector or generate from index
+            selector = js_field.get("selector", "")
+            sig = selector.replace("#", "").replace("[name=\"", "").replace("\"]", "")
+            if not sig:
+                sig = f"field_{idx}"
 
-        input_type = _infer_input_type(el)
-        sig = _signature_for(el, fallback_idx)
-        fallback_idx += 1
-
-        if not sig or sig in seen:
-            logger.debug("Skipping element with duplicate or empty signature: %s", sig)
+        # Skip duplicates
+        if sig in seen:
             continue
         seen.add(sig)
 
-        label = _label_for(root, el) or sig
-        required = _is_required(root, el)
-        selector = _selector_for(el)
+        # Use label as-is (NO cleaning or transformation)
+        label = js_field.get("label") or sig
 
+        # Map input type (JS uses camelCase, Python uses snake_case literals)
+        js_input_type = js_field.get("inputType", "text")
+        input_type_map = {
+            "text": "text",
+            "email": "email",
+            "tel": "tel",
+            "file": "file",
+            "textarea": "textarea",
+            "select": "select",
+            "radio": "radio",
+            "checkbox": "checkbox",
+            "date": "date",
+            "number": "number",
+            "password": "password",
+            "url": "url",
+            "search": "text",  # Treat search as text
+        }
+
+        # If isCombobox is true, treat as select
+        if js_field.get("isCombobox"):
+            input_type = "select"
+        else:
+            input_type = input_type_map.get(js_input_type, "text")
+
+        # Extract options (convert from [{value, label}] to [value])
+        js_options = js_field.get("options", [])
+        options = []
+        if isinstance(js_options, list):
+            for opt in js_options:
+                if isinstance(opt, dict):
+                    val = opt.get("value") or opt.get("label")
+                    if val:
+                        options.append(str(val))
+                elif isinstance(opt, str):
+                    options.append(opt)
+
+        # Build FormField
         field: FormField = {
             "question_signature": sig,
             "label": label,
             "input_type": input_type,
-            "required": required,
+            "required": js_field.get("required", False),
         }
-        if selector:
-            field["selector"] = selector
 
-        opts = _options_for(el, input_type)
-        if opts is not None:
-            field["options"] = opts
-        
-        logger.debug("Extracted field: %s", field)
+        # Optional fields
+        if js_field.get("selector"):
+            field["selector"] = js_field["selector"]
+
+        if options:
+            field["options"] = options
+
         out.append(field)
+
+    # Post-process: enrich country fields (reuse existing logic)
+    out = _enrich_country_fields(out)
 
     return out
 
@@ -186,194 +253,24 @@ def summarize_autofill_plan(plan_json: AutofillPlanJSON) -> AutofillPlanSummary:
     }
 
 
-def _pick_form_scope(doc):
-    scope = doc.cssselect("form#application-form")
-    return scope[0] if scope else doc
-
-def _should_skip_control(el) -> bool:
-    tag = (getattr(el, "tag", "") or "").lower()
-    input_type = (el.get("type") or "").lower()
-
-    aria_hidden = (el.get("aria-hidden") or "").lower() == "true"
-    tabindex = (el.get("tabindex") or "").strip()
-
-    # 1) Non-user controls (framework internals, hidden validation inputs, etc.)
-    # This catches react-select/remix "requiredInput" artifacts across many sites.
-    if aria_hidden or tabindex == "-1":
-        return True
-
-    # 2) Hidden inputs
-    if tag == "input" and input_type == "hidden":
-        return True
-
-    # 3) Buttons / submits
-    if tag == "input" and input_type in {"submit", "button", "reset", "image"}:
-        return True
-
-    # 4) Dropdown "search" inputs used internally by UI widgets (e.g., intl-tel-input, select libraries)
-    # Heuristic: type=search + placeholder "Search" + appears to control a listbox
-    if tag == "input" and input_type == "search":
-        placeholder = (el.get("placeholder") or "").strip().lower()
-        aria_controls = (el.get("aria-controls") or "").strip().lower()
-        role = (el.get("role") or "").strip().lower()
-        if placeholder == "search" and (role in {"combobox", "searchbox"} or "listbox" in aria_controls):
-            return True
-
-    return False
-
-
-def _norm_text(s: Optional[str]) -> str:
-    return " ".join((s or "").replace("\xa0", " ").split()).strip()
-
-
-def _label_for(root, el) -> str:
-    el_id = el.get("id")
-
-    # 1) <label for="...">
-    if el_id:
-        labs = root.cssselect(f'label[for="{el_id}"]')
-        if labs:
-            txt = _norm_text(labs[0].text_content()).replace("*", "").strip()
-            if txt:
-                return txt
-
-    # 2) aria-label
-    aria_label = el.get("aria-label")
-    if aria_label:
-        return _norm_text(aria_label)
-
-    # 3) aria-labelledby
-    labelledby = el.get("aria-labelledby")
-    if labelledby:
-        parts: List[str] = []
-        for rid in labelledby.split():
-            refs = root.cssselect(f"#{rid}")
-            if refs:
-                t = _norm_text(refs[0].text_content())
-                if t:
-                    parts.append(t)
-        if parts:
-            return _norm_text(" ".join(parts))
-
-    # 4) ancestor label wrapper
-    anc = el.getparent()
-    while anc is not None:
-        if (getattr(anc, "tag", "") or "").lower() == "label":
-            txt = _norm_text(anc.text_content()).replace("*", "").strip()
-            if txt:
-                return txt
-        anc = anc.getparent()
-
-    return ""
-
-
-def _is_required(root, el) -> bool:
-    # Strong, direct signals only (works across job boards)
-    if (el.get("aria-required") or "").lower() == "true":
-        return True
-
-    if el.get("required") is not None:
-        return True
-
-    # Star in label text (common on many forms)
-    el_id = el.get("id")
-    if el_id:
-        labs = root.cssselect(f'label[for="{el_id}"]')
-        if labs and "*" in (labs[0].text_content() or ""):
-            return True
-
-    return False
-
-
-def _selector_for(el) -> str:
-    el_id = el.get("id")
-    if el_id:
-        return f"#{el_id}"
-    name = el.get("name")
-    if name:
-        return f'[name="{name}"]'
-    return ""
-
-
-def _signature_for(el, fallback_idx: int) -> str:
-    return el.get("id") or el.get("name") or f"field_{fallback_idx}"
-
-
-def _infer_input_type(el) -> "InputType":
-    tag = (getattr(el, "tag", "") or "").lower()
-    if tag == "textarea":
-        return "textarea"
-    if tag == "select":
-        return "select"
-    if tag != "input":
-        return "unknown"
-
-    # React-select / ARIA combobox behaves like select
-    role = (el.get("role") or "").lower()
-    if role == "combobox" or (el.get("aria-autocomplete") == "list"):
-        return "select"
-
-    t = (el.get("type") or "text").lower()
-    if t in {
-        "text",
-        "date",
-        "number",
-        "email",
-        "password",
-        "file",
-        "tel",
-        "url",
-        "hidden",
-        "radio",
-        "checkbox",
-    }:
-        return cast("InputType", t)
-    return "unknown"
-
-
-def _options_for(el, input_type: "InputType") -> Optional[List[str]]:
-    tag = (getattr(el, "tag", "") or "").lower()
-    if input_type == "select" and tag == "select":
-        opts = [_norm_text(o.text_content()) for o in el.cssselect("option")]
-        opts = [o for o in opts if o]
-        return opts
-    if input_type == "select":
-        opts = _options_from_aria_listbox(el)
-        if opts:
-            return opts
-    return None
-
-
-def _options_from_aria_listbox(el) -> List[str]:
+def _enrich_country_fields(fields: List[FormField]) -> List[FormField]:
     """
-    Best-effort extraction for ARIA combobox/select widgets (e.g., React-Select).
-    Looks for a referenced listbox or common react-select listbox IDs.
+    Enrich select fields that appear to be country selectors with standard country options.
+    This helps when the DOM doesn't have the listbox expanded (React Select, etc.)
     """
-    root = el.getroottree().getroot()
-    listbox_id = (el.get("aria-controls") or el.get("aria-owns") or "").strip()
+    for field in fields:
+        # Check if this is a select field without options
+        if field.get("input_type") == "select" and not field.get("options"):
+            label = field.get("label", "").lower()
+            sig = field.get("question_signature", "").lower()
 
-    # React-Select often uses id="react-select-<input-id>-listbox".
-    if not listbox_id:
-        el_id = (el.get("id") or "").strip()
-        if el_id:
-            listbox_id = f"react-select-{el_id}-listbox"
+            # Check if label or signature indicates this is a country field
+            country_keywords = ["country", "nationality", "citizenship"]
+            if any(keyword in label or keyword in sig for keyword in country_keywords):
+                logger.info(f"Enriching country field '{field.get('label')}' with standard country list")
+                field["options"] = STANDARD_COUNTRIES.copy()
 
-    listbox = None
-    if listbox_id:
-        # Use XPath instead of CSS selector to avoid issues with special characters in IDs
-        try:
-            matches = root.xpath(f'//*[@id="{listbox_id}"]')
-            if matches:
-                listbox = matches[0]
-        except Exception as e:
-            logger.debug(f"Failed to find listbox with id={listbox_id}: {e}")
-
-    if listbox is None:
-        return []
-
-    options = [_norm_text(o.text_content()) for o in listbox.cssselect('[role="option"]')]
-    options = [o for o in options if o]
-    return options
+    return fields
 
 
 def _normalize_answer(answer: Optional[FormFieldAnswer]) -> FormFieldAnswer:

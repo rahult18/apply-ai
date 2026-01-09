@@ -305,7 +305,8 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
                 job_application_id=body.job_application_id,
                 user_id=user_id,
                 page_url=normalized_job_url,
-                dom_html=body.dom_html
+                dom_html=body.dom_html,
+                extracted_fields=[field.model_dump() for field in body.extracted_fields]
             )
             
             # fetching the extracted JD details from DB
