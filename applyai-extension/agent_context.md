@@ -88,44 +88,28 @@ This folder contains the browser extension for the Application Tracker project. 
 
 - `assets/`: Directory for static assets (icons, images) used by the extension
 
-- `popup/`: Extension popup UI
-  - `popup.html`: Popup structure with:
-    - Header with logo, "ApplyAI" title, subtitle "Autofill job applications faster", and status pill
-    - Card with account info display
-    - Action buttons: Connect, Extract/Autofill (dynamic), Open Dashboard, Disconnect, Debug Extract
-    - **Debug button**: "🐛 Extract Form Fields (Debug)" - always visible, triggers debug extraction with verbose logging
-    - Result card for displaying extracted job info (job_title, company, "Saved to tracker" meta)
+- `popup/`: Extension popup UI (React + Vite + Tailwind)
+  - `index.html`: Entry point that loads the built popup.js from Vite
+  - `src/main.jsx`: React entry point that renders Popup component
+  - `src/Popup.jsx`: Main popup component with:
+    - Header with logo, "ApplyAI" title, subtitle "Autofill applications faster", and status pill
+    - Account info display with connection status
     - Status messages for operation progress
+    - Job card display for extracted job info (job_title, company, "Saved to tracker" meta)
+    - Action buttons: Connect, Extract Job/Generate Autofill (dynamic), Dashboard, Debug, Disconnect
     - Contextual hints for user guidance
-    - **Note**: References `.result*` CSS classes that are not defined in popup.css
-
-  - `popup.css`: Dark theme styling with:
-    - CSS variables for colors (dark background with gradient overlays)
-    - Status pill styles for different states: idle, ok (green), warn (yellow), err (red)
-    - Button styles: primary (gradient), ghost, danger
-    - Card layouts with borders and shadows
-    - **Missing**: `.result`, `.result__title`, `.result__company`, `.result__divider`, `.result__meta` styles (referenced in HTML but not defined)
-
-  - `popup.js`: Popup UI logic (~320 lines)
-    - **Session state management**: idle → extracting → extracted → autofilling → autofilled → error
-    - **Connection status checking**: Calls `/extension/me` on load to validate token
-    - **Dynamic UI modes**:
-      - Disconnected: Shows "Connect" button
-      - Connected: Shows "Extract Job Description" button, "Open Dashboard", "Disconnect", and "Debug Extract"
-      - After extraction: Button changes to "Generate Autofill", shows result card with job info
-      - During operations: Button disabled with progress text
-    - **Button handlers**:
-      - Connect: Opens `http://localhost:3000/extension/connect`
-      - Extract/Autofill: Sends `APPLYAI_EXTRACT_JD` (idle state) or `APPLYAI_AUTOFILL_PLAN` (extracted state)
-      - Open Dashboard: Opens `http://localhost:3000/home`
-      - Disconnect: Removes token from storage
-      - **Debug Extract**: Sends `APPLYAI_DEBUG_EXTRACT_FIELDS` for verbose field extraction debugging
-    - **Message listeners**:
-      - `APPLYAI_EXTENSION_CONNECTED`: Refreshes UI after connection
-      - `APPLYAI_EXTRACT_JD_PROGRESS`: Updates status during extraction
-      - `APPLYAI_EXTRACT_JD_RESULT`: Shows result card with job title/company, changes button to "Generate Autofill"
-      - `APPLYAI_AUTOFILL_PROGRESS`: Updates status during autofill
-      - `APPLYAI_AUTOFILL_RESULT`: Shows filled field count, updates status pill
+  - `src/style.css`: Tailwind CSS styles (light theme with good contrast)
+  - `src/components/`:
+    - `ActionButton.jsx`: Reusable button component with variants (primary, secondary, danger, ghost)
+      - Primary: Blue background (#0284c7) with white text
+      - Secondary: White background with dark text and border
+      - Danger: Red background with white text
+      - Ghost: Gray background with dark text
+    - `StatusPill.jsx`: Status indicator with color-coded states (checking, connected, disconnected, error, working)
+    - `StatusMessage.jsx`: Alert/notification component with success/error/info/warning states
+    - `JobCard.jsx`: Card displaying extracted job title and company
+  - `src/hooks/`:
+    - `useExtension.js`: Custom hook managing extension state and messaging
 
 ## Purpose
 This folder provides the browser extension for the Application Tracker project. The extension enables users to:
@@ -241,15 +225,44 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 - `/extension/connect`: Connection page that generates one-time codes
 - `/home`: Main dashboard for viewing saved applications
 
-## Known Issues
-- **Missing CSS**: popup.html references `.result*` CSS classes that are not defined in popup.css (result card may not display properly)
+## Build and Development
 
-## Recent Updates
-- **Enhanced Dropdown Extraction (v0.1.0+)**:
-  - Added programmatic React Select dropdown opening before field extraction
-  - Improved option extraction success rate from ~0% to ~100% for dynamically loaded dropdowns
-  - Added debug extraction mode with detailed logging for troubleshooting
-  - Backend now receives pre-populated dropdown options, reducing reliance on enrichment fallbacks
+- **Build Tool**: Vite with React plugin
+- **Build Output**: All files compiled to `dist/` folder (gitignored)
+- **Build Process**:
+  - `vite.config.js` configures build with:
+    - React plugin for JSX transformation
+    - Copy plugin that copies manifest.json, background.js, and content.js to dist after build
+    - Popup entry point configured to bundle popup.jsx as popup.js
+    - Output naming: entryFileNames `[name].js`, chunkFileNames `[name].js`, assetFileNames `[name].[ext]`
+- **Development Scripts**:
+  - `npm run dev`: Watch mode - rebuilds automatically on source changes
+  - `npm run build`: Production build - generates optimized dist folder
+  - `npm run preview`: Preview the built extension
+- **Loading in Chrome**:
+  - Build first with `npm run build`
+  - Go to `chrome://extensions/` → Enable Developer mode
+  - Click "Load unpacked" and select the `dist/` folder (not the root folder)
+  - Extension reloads on each rebuild
+
+## UI Improvements (v0.1.0+)
+
+- **High Contrast Design**: All text is clearly visible on light backgrounds
+  - Button text: Bold, larger font size (text-base), increased padding (py-3)
+  - Primary button: Blue background (#0284c7) with white text
+  - Secondary button: White background with dark text (#111827) and visible border
+  - Danger button: Red background with white text
+  - Ghost/Debug button: Gray background with dark text
+- **Status Indicators**: Color-coded status pills with high contrast
+  - Connected: Green background with dark green text
+  - Disconnected: Yellow background with dark yellow text
+  - Error: Red background with dark red text
+  - Working: Blue background with animation and dark blue text
+- **Status Messages**: High contrast colored alerts matching message type
+  - Info: Blue background with dark blue text
+  - Success: Green background with dark green text
+  - Error: Red background with dark red text
+  - Warning: Amber background with dark amber text
 
 ## Storage Schema
 - `installId`: Unique UUID for extension installation
