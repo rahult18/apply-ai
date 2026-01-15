@@ -5,7 +5,7 @@
     "description": "Connect ApplyAI to your account.",
     "action": {
         "default_title": "ApplyAI",
-        "default_popup": "popup/popup.html"
+        "default_popup": "popup/index.html"
     },
     "background": {
         "service_worker": "background.js"
