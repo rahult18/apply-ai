@@ -17,6 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const extractBtn = document.getElementById("extractBtn");
   const secondaryBtn = document.getElementById("secondaryBtn");
   const disconnectBtn = document.getElementById("disconnectBtn");
+  const debugExtractBtn = document.getElementById("debugExtractBtn");
 
   const extractStatus = document.getElementById("extractStatus");
 
@@ -286,6 +287,34 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     startExtraction();
+  });
+
+  debugExtractBtn.addEventListener("click", async () => {
+    console.log("🐛 DEBUG: Starting form field extraction with dropdown interaction...");
+    setPill("warn", "Extracting");
+    debugExtractBtn.disabled = true;
+    debugExtractBtn.textContent = "🐛 Extracting...";
+
+    chrome.runtime.sendMessage({ type: "APPLYAI_DEBUG_EXTRACT_FIELDS" }, (resp) => {
+      debugExtractBtn.disabled = false;
+      debugExtractBtn.textContent = "🐛 Extract Form Fields (Debug)";
+
+      if (chrome.runtime.lastError) {
+        setPill("err", "Error");
+        console.error("🐛 DEBUG: Extraction failed", chrome.runtime.lastError);
+        return;
+      }
+
+      if (resp?.ok) {
+        setPill("ok", "Extracted");
+        console.log("🐛 DEBUG: Extraction successful!", resp);
+        console.log(`🐛 DEBUG: Found ${resp.fieldCount} fields`);
+        console.log("🐛 DEBUG: Check the page console for detailed field data");
+      } else {
+        setPill("err", "Error");
+        console.error("🐛 DEBUG: Extraction failed", resp?.error);
+      }
+    });
   });
 
   updateUI();

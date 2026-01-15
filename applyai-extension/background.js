@@ -58,6 +58,9 @@ async function extractFormFieldsFromTab(tabId) {
         func: () => {
             console.log("ApplyAI: extracting form fields from page");
 
+            // Helper: Sleep utility
+            const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
             // Helper: Find label for an input
             function findLabelForInput(element) {
                 if (element.id) {
@@ -131,6 +134,47 @@ async function extractFormFieldsFromTab(tabId) {
                 return false;
             }
 
+            // Helper: Try to open a React Select dropdown
+            async function tryOpenReactSelect(combobox) {
+                try {
+                    combobox.focus();
+                    await sleep(100);
+
+                    // Dispatch proper mouse events
+                    combobox.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(50);
+                    combobox.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(50);
+                    combobox.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(100);
+
+                    // Try arrow down key
+                    combobox.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'ArrowDown',
+                        code: 'ArrowDown',
+                        keyCode: 40,
+                        bubbles: true,
+                        cancelable: true
+                    }));
+                    await sleep(100);
+
+                    // Try to find and click the dropdown indicator
+                    const container = combobox.closest('[class*="select"]');
+                    if (container) {
+                        const indicator = container.querySelector('[class*="indicator"], [class*="arrow"], [class*="dropdown"]');
+                        if (indicator) {
+                            indicator.click();
+                            await sleep(100);
+                        }
+                    }
+
+                    await sleep(300); // Wait for options to render
+                    return true;
+                } catch (error) {
+                    return false;
+                }
+            }
+
             // Helper: Extract options from select/combobox
             function extractOptions(element) {
                 const options = [];
@@ -147,7 +191,9 @@ async function extractFormFieldsFromTab(tabId) {
                     });
                 }
 
+                // For combobox, check multiple possible locations for options
                 if (element.getAttribute('role') === 'combobox') {
+                    // Method 1: Check aria-controls
                     const listboxId = element.getAttribute('aria-controls');
                     if (listboxId) {
                         const listbox = document.getElementById(listboxId);
@@ -160,6 +206,22 @@ async function extractFormFieldsFromTab(tabId) {
                                 });
                             });
                         }
+                    }
+
+                    // Method 2: Look for menu container (React Select pattern)
+                    if (options.length === 0) {
+                        const menuContainers = document.querySelectorAll('[class*="menu"], [class*="Menu"]');
+                        menuContainers.forEach(menu => {
+                            const menuOptions = menu.querySelectorAll('[role="option"]');
+                            if (menuOptions.length > 0) {
+                                menuOptions.forEach(opt => {
+                                    options.push({
+                                        value: opt.getAttribute('data-value') || opt.textContent.trim(),
+                                        label: opt.textContent.trim()
+                                    });
+                                });
+                            }
+                        });
                     }
                 }
 
@@ -184,9 +246,15 @@ async function extractFormFieldsFromTab(tabId) {
                 return false;
             }
 
-            // Main extraction function
-            function extractFormFields() {
+            // Main extraction function (async to support dropdown interaction)
+            async function extractFormFields() {
                 const fields = [];
+
+                // Step 1: Try to open all combobox/React Select dropdowns first
+                const comboboxes = document.querySelectorAll('[role="combobox"]');
+                for (const combobox of comboboxes) {
+                    await tryOpenReactSelect(combobox);
+                }
 
                 // Extract standard input fields
                 const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
@@ -242,8 +310,7 @@ async function extractFormFieldsFromTab(tabId) {
                     });
                 });
 
-                // Extract React Select / Combobox fields
-                const comboboxes = document.querySelectorAll('[role="combobox"]');
+                // Extract React Select / Combobox fields (after trying to open them)
                 comboboxes.forEach(combobox => {
                     if (combobox.tagName === 'INPUT') {
                         const existingIndex = fields.findIndex(f => f.id === combobox.id);
@@ -344,14 +411,423 @@ async function extractFormFieldsFromTab(tabId) {
                 return fields;
             }
 
-            try {
-                const formFields = extractFormFields();
-                console.log("ApplyAI: extracted form fields", formFields.length);
-                return formFields;
-            } catch (e) {
-                console.error("ApplyAI: form field extraction error", e);
+            // Execute the extraction
+            return extractFormFields().then(fields => {
+                console.log("ApplyAI: extracted form fields", fields.length);
+                return fields;
+            }).catch(error => {
+                console.error("ApplyAI: form field extraction error", error);
                 return [];
+            });
+        }
+    });
+
+    return result || [];
+}
+
+/**
+ * Enhanced form field extraction with dropdown interaction
+ * This function tries to open React Select and native dropdowns to extract their options
+ */
+async function extractFormFieldsWithDropdownInteraction(tabId) {
+    const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+            console.log("🐛 ApplyAI DEBUG: Starting enhanced form field extraction with dropdown interaction");
+
+            // Helper: Sleep utility
+            const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+            // Helper: Find label for an input
+            function findLabelForInput(element) {
+                if (element.id) {
+                    const label = document.querySelector(`label[for="${element.id}"]`);
+                    if (label) return label.textContent.trim();
+                }
+
+                let parent = element.parentElement;
+                while (parent && parent.tagName !== 'BODY') {
+                    if (parent.tagName === 'LABEL') {
+                        return parent.textContent.trim();
+                    }
+                    parent = parent.parentElement;
+                }
+
+                const prevSibling = element.previousElementSibling;
+                if (prevSibling && prevSibling.tagName === 'LABEL') {
+                    return prevSibling.textContent.trim();
+                }
+
+                if (element.getAttribute('aria-label')) {
+                    return element.getAttribute('aria-label');
+                }
+
+                if (element.placeholder) {
+                    return element.placeholder;
+                }
+
+                return null;
             }
+
+            // Helper: Generate CSS selector
+            function generateSelector(element) {
+                if (element.id) {
+                    if (/^\d/.test(element.id)) {
+                        return `[id="${element.id}"]`;
+                    }
+                    return `#${element.id}`;
+                }
+
+                if (element.name) {
+                    return `[name="${element.name}"]`;
+                }
+
+                const path = [];
+                let current = element;
+                while (current && current.tagName !== 'BODY') {
+                    let selector = current.tagName.toLowerCase();
+                    if (current.className) {
+                        const classes = current.className.split(' ').filter(c => c && !c.startsWith('css-'));
+                        if (classes.length > 0) {
+                            selector += `.${classes[0]}`;
+                        }
+                    }
+                    path.unshift(selector);
+                    current = current.parentElement;
+                }
+
+                return path.slice(-3).join(' > ');
+            }
+
+            // Helper: Check if field is required
+            function isRequired(element) {
+                if (element.required) return true;
+                if (element.getAttribute('aria-required') === 'true') return true;
+
+                const label = findLabelForInput(element);
+                if (label && label.includes('*')) return true;
+
+                return false;
+            }
+
+            // Helper: Try to open a React Select dropdown
+            async function tryOpenReactSelect(combobox) {
+                try {
+                    combobox.focus();
+                    await sleep(100);
+
+                    // Dispatch proper mouse events
+                    combobox.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(50);
+                    combobox.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(50);
+                    combobox.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(100);
+
+                    // Try arrow down key
+                    combobox.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'ArrowDown',
+                        code: 'ArrowDown',
+                        keyCode: 40,
+                        bubbles: true,
+                        cancelable: true
+                    }));
+                    await sleep(100);
+
+                    // Try to find and click the dropdown indicator
+                    const container = combobox.closest('[class*="select"]');
+                    if (container) {
+                        const indicator = container.querySelector('[class*="indicator"], [class*="arrow"], [class*="dropdown"]');
+                        if (indicator) {
+                            indicator.click();
+                            await sleep(100);
+                        }
+                    }
+
+                    await sleep(300); // Wait for options to render
+                    return true;
+                } catch (error) {
+                    return false;
+                }
+            }
+
+            // Helper: Extract options from select/combobox (enhanced)
+            function extractOptions(element) {
+                const options = [];
+
+                if (element.tagName === 'SELECT') {
+                    const optionElements = element.querySelectorAll('option');
+                    optionElements.forEach(opt => {
+                        if (opt.value) {
+                            options.push({
+                                value: opt.value,
+                                label: opt.textContent.trim()
+                            });
+                        }
+                    });
+                }
+
+                // For combobox, check multiple possible locations for options
+                if (element.getAttribute('role') === 'combobox') {
+                    // Method 1: Check aria-controls
+                    const listboxId = element.getAttribute('aria-controls');
+                    if (listboxId) {
+                        const listbox = document.getElementById(listboxId);
+                        if (listbox) {
+                            const optionElements = listbox.querySelectorAll('[role="option"]');
+                            optionElements.forEach(opt => {
+                                options.push({
+                                    value: opt.getAttribute('data-value') || opt.textContent.trim(),
+                                    label: opt.textContent.trim()
+                                });
+                            });
+                        }
+                    }
+
+                    // Method 2: Look for menu container (React Select pattern)
+                    if (options.length === 0) {
+                        const menuContainers = document.querySelectorAll('[class*="menu"], [class*="Menu"]');
+                        menuContainers.forEach(menu => {
+                            const menuOptions = menu.querySelectorAll('[role="option"]');
+                            if (menuOptions.length > 0) {
+                                menuOptions.forEach(opt => {
+                                    options.push({
+                                        value: opt.getAttribute('data-value') || opt.textContent.trim(),
+                                        label: opt.textContent.trim()
+                                    });
+                                });
+                            }
+                        });
+                    }
+                }
+
+                return options;
+            }
+
+            // Helper: Check if input should be skipped
+            function shouldSkipInput(input) {
+                if (input.className && input.className.includes('requiredInput')) {
+                    return true;
+                }
+
+                const selectContainer = input.closest('.select__container, .select-shell');
+                if (selectContainer && input.getAttribute('role') !== 'combobox') {
+                    return true;
+                }
+
+                if (!input.id && !input.name && !input.placeholder && input.getAttribute('role') !== 'combobox') {
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Main extraction function (async version with dropdown interaction)
+            async function extractFormFieldsWithInteraction() {
+                const fields = [];
+
+                // Step 1: Try to open all combobox/React Select dropdowns
+                const comboboxes = document.querySelectorAll('[role="combobox"]');
+                for (const combobox of comboboxes) {
+                    await tryOpenReactSelect(combobox);
+                }
+
+                // Extract standard input fields
+                const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+
+                inputs.forEach(input => {
+                    if (shouldSkipInput(input)) {
+                        return;
+                    }
+
+                    fields.push({
+                        type: 'input',
+                        inputType: input.type || 'text',
+                        name: input.name || null,
+                        id: input.id || null,
+                        label: findLabelForInput(input),
+                        placeholder: input.placeholder || null,
+                        required: isRequired(input),
+                        value: input.value || null,
+                        selector: generateSelector(input),
+                        autocomplete: input.getAttribute('autocomplete') || null
+                    });
+                });
+
+                // Extract textarea fields
+                const textareas = document.querySelectorAll('textarea');
+
+                textareas.forEach(textarea => {
+                    fields.push({
+                        type: 'textarea',
+                        inputType: 'textarea',
+                        name: textarea.name || null,
+                        id: textarea.id || null,
+                        label: findLabelForInput(textarea),
+                        placeholder: textarea.placeholder || null,
+                        required: isRequired(textarea),
+                        value: textarea.value || null,
+                        selector: generateSelector(textarea),
+                        maxLength: textarea.maxLength > 0 ? textarea.maxLength : null
+                    });
+                });
+
+                // Extract select fields
+                const selects = document.querySelectorAll('select');
+
+                selects.forEach(select => {
+                    const options = extractOptions(select);
+                    fields.push({
+                        type: 'select',
+                        inputType: 'select',
+                        name: select.name || null,
+                        id: select.id || null,
+                        label: findLabelForInput(select),
+                        required: isRequired(select),
+                        value: select.value || null,
+                        selector: generateSelector(select),
+                        options: options
+                    });
+                });
+
+                // Extract React Select / Combobox fields (after trying to open them)
+                comboboxes.forEach(combobox => {
+                    if (combobox.tagName === 'INPUT') {
+                        const existingIndex = fields.findIndex(f => f.id === combobox.id);
+                        if (existingIndex >= 0) {
+                            const options = extractOptions(combobox);
+                            fields[existingIndex].isCombobox = true;
+                            fields[existingIndex].options = options;
+                            return;
+                        }
+                    }
+
+                    const options = extractOptions(combobox);
+
+                    fields.push({
+                        type: 'combobox',
+                        inputType: 'select',
+                        name: combobox.getAttribute('name') || null,
+                        id: combobox.id || null,
+                        label: findLabelForInput(combobox),
+                        placeholder: combobox.getAttribute('placeholder') || null,
+                        required: isRequired(combobox),
+                        selector: generateSelector(combobox),
+                        options: options,
+                        ariaLabel: combobox.getAttribute('aria-label') || null
+                    });
+                });
+
+                // Extract radio button groups
+                const radioInputs = document.querySelectorAll('input[type="radio"]');
+                const radioGroups = {};
+
+                radioInputs.forEach(radio => {
+                    const name = radio.name;
+                    if (!name) return;
+
+                    if (!radioGroups[name]) {
+                        radioGroups[name] = {
+                            type: 'radio',
+                            inputType: 'radio',
+                            name: name,
+                            label: findLabelForInput(radio) || name,
+                            required: isRequired(radio),
+                            options: [],
+                            selector: `input[name="${name}"]`
+                        };
+                    }
+
+                    radioGroups[name].options.push({
+                        value: radio.value,
+                        label: findLabelForInput(radio) || radio.value,
+                        id: radio.id,
+                        checked: radio.checked
+                    });
+                });
+
+                fields.push(...Object.values(radioGroups));
+
+                // Extract checkbox groups
+                const checkboxInputs = document.querySelectorAll('input[type="checkbox"]');
+                const checkboxGroups = {};
+
+                checkboxInputs.forEach(checkbox => {
+                    const name = checkbox.name;
+                    if (!name) {
+                        fields.push({
+                            type: 'checkbox',
+                            inputType: 'checkbox',
+                            name: name,
+                            id: checkbox.id || null,
+                            label: findLabelForInput(checkbox),
+                            required: isRequired(checkbox),
+                            value: checkbox.value,
+                            checked: checkbox.checked,
+                            selector: generateSelector(checkbox)
+                        });
+                        return;
+                    }
+
+                    if (!checkboxGroups[name]) {
+                        checkboxGroups[name] = {
+                            type: 'checkbox-group',
+                            inputType: 'checkbox',
+                            name: name,
+                            label: name,
+                            required: isRequired(checkbox),
+                            options: [],
+                            selector: `input[name="${name}"]`
+                        };
+                    }
+
+                    checkboxGroups[name].options.push({
+                        value: checkbox.value,
+                        label: findLabelForInput(checkbox) || checkbox.value,
+                        id: checkbox.id,
+                        checked: checkbox.checked
+                    });
+                });
+
+                fields.push(...Object.values(checkboxGroups));
+
+                return fields;
+            }
+
+            // Execute the extraction
+            return extractFormFieldsWithInteraction().then(fields => {
+                const fieldsWithOptions = fields.filter(f => f.options && f.options.length > 0);
+                const fieldsWithoutOptions = fields.filter(f =>
+                    (f.type === 'select' || f.type === 'combobox') &&
+                    (!f.options || f.options.length === 0)
+                );
+
+                console.log("🐛 ========================================");
+                console.log("🐛 EXTRACTION COMPLETE");
+                console.log(`🐛 Total fields: ${fields.length}`);
+                console.log(`🐛 Fields with options: ${fieldsWithOptions.length}`);
+
+                if (fieldsWithoutOptions.length > 0) {
+                    console.warn(`🐛 WARNING: ${fieldsWithoutOptions.length} dropdowns with no options`);
+                    fieldsWithoutOptions.forEach(field => {
+                        console.warn(`  - ${field.label || field.id || field.name}`);
+                    });
+                }
+
+                console.log("🐛 Full data available in console");
+                console.log("🐛 ========================================");
+                console.table(fields.map(f => ({
+                    type: f.type,
+                    label: f.label || '(no label)',
+                    options: f.options ? f.options.length : 'N/A'
+                })));
+                console.log(fields);
+
+                return fields;
+            }).catch(error => {
+                console.error("🐛 ERROR during extraction:", error);
+                return [];
+            });
         }
     });
 
@@ -825,6 +1301,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 });
 
                 sendResponse({ ok: true });
+                return;
+            }
+
+            /**
+             * DEBUG: Extract form fields with dropdown interaction
+             */
+            if (message?.type === "APPLYAI_DEBUG_EXTRACT_FIELDS") {
+                console.log("🐛 DEBUG: Received debug extraction request");
+
+                const tab = await getActiveTab();
+                if (!tab?.id) {
+                    sendResponse({ ok: false, error: "No active tab found." });
+                    return;
+                }
+
+                const tabUrl = tab.url || "";
+                if (isRestrictedUrl(tabUrl)) {
+                    sendResponse({ ok: false, error: "Cannot access this page (restricted URL)." });
+                    return;
+                }
+
+                console.log("🐛 DEBUG: Extracting form fields from tab:", tab.id, tabUrl);
+
+                try {
+                    const fields = await extractFormFieldsWithDropdownInteraction(tab.id);
+
+                    console.log("🐛 DEBUG: Extraction complete in background script");
+                    console.log(`🐛 DEBUG: Extracted ${fields.length} fields`);
+                    console.log("🐛 DEBUG: Field summary:", fields.map(f => ({
+                        type: f.type,
+                        label: f.label || '(no label)',
+                        optionCount: f.options ? f.options.length : 0
+                    })));
+
+                    sendResponse({
+                        ok: true,
+                        fieldCount: fields.length,
+                        fields: fields
+                    });
+                } catch (error) {
+                    console.error("🐛 DEBUG: Extraction error:", error);
+                    sendResponse({
+                        ok: false,
+                        error: error.message || "Unknown error during extraction"
+                    });
+                }
                 return;
             }
 

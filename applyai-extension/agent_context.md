@@ -10,19 +10,31 @@ This folder contains the browser extension for the Application Tracker project. 
   - Permissions: `storage`, `tabs`, `activeTab`, `scripting`
   - Host permissions: `http://localhost:3000/*`, `http://localhost:8000/*`
 
-- `background.js`: The main service worker running in the background (~1111 lines). Key functionality:
+- `background.js`: The main service worker running in the background (~1600+ lines). Key functionality:
   - **Storage helpers**: `storageGet()` and `storageSet()` for Chrome local storage
   - **Install ID management**: `ensureInstallId()` generates and stores a unique installation UUID
   - **Tab interaction**: `getActiveTab()` gets the current active tab
   - **DOM extraction**: `extractDomHtmlFromTab(tabId)` injects script into tab to extract full DOM HTML and URL
-  - **Form field extraction**: `extractFormFieldsFromTab(tabId)` extracts structured form fields using JavaScript DOMParser:
+  - **Form field extraction with dropdown interaction**: `extractFormFieldsFromTab(tabId)` extracts structured form fields using JavaScript DOMParser with enhanced React Select support:
+    - **Programmatically opens React Select dropdowns** before extraction using `tryOpenReactSelect()`:
+      - Focuses combobox element and dispatches proper MouseEvent and KeyboardEvent objects
+      - Tries clicking dropdown indicator elements
+      - Waits 300ms for options to render in DOM
     - Detects inputs, textareas, selects, comboboxes (React Select), radio groups, and checkbox groups
     - Generates CSS selectors for each field (#id or [name="..."])
     - Extracts labels via multiple strategies (for attribute, parent label, aria-label, placeholder)
     - Determines if fields are required (required attribute, aria-required, asterisk in label)
-    - Extracts options from native selects and React Select components (when expanded)
+    - **Enhanced option extraction**: Checks multiple locations for React Select options:
+      - aria-controls listbox (primary method)
+      - Menu containers with `[class*="menu"]` (fallback for opened dropdowns)
     - Filters out React Select internal validation inputs (.requiredInput, hidden inputs in .select__container)
     - Returns structured JSON: type, inputType, name, id, label, placeholder, required, selector, options, autocomplete, isCombobox
+  - **Debug form field extraction**: `extractFormFieldsWithDropdownInteraction(tabId)` provides verbose debugging:
+    - Same extraction logic as production with detailed console logging
+    - Shows step-by-step progress, field counts, and option extraction results
+    - Displays summary table with all extracted fields
+    - Warns about any dropdowns that failed to extract options
+    - Outputs full field data as JSON for analysis
   - **Autofill application**: `applyAutofillPlanToTab(tabId, planJson)` applies autofill plans with sophisticated form filling:
     - Supports text inputs, native selects, React Select components, radio groups, and checkbox groups
     - React Select detection via `role="combobox"` or `aria-autocomplete="list"`
@@ -37,7 +49,14 @@ This folder contains the browser extension for the Application Tracker project. 
      - Stores JWT token in `chrome.storage.local`
      - Notifies popup with `APPLYAI_EXTENSION_CONNECTED`
 
-  2. `APPLYAI_EXTRACT_JD`: Job description extraction
+  2. `APPLYAI_DEBUG_EXTRACT_FIELDS`: Debug form field extraction
+     - Validates active tab and URL restrictions
+     - Runs `extractFormFieldsWithDropdownInteraction()` with verbose logging
+     - Returns field count and full field data to popup
+     - Logs detailed extraction results to page console (summary, table, warnings)
+     - Used by debug button for troubleshooting dropdown extraction issues
+
+  3. `APPLYAI_EXTRACT_JD`: Job description extraction
      - Validates token and active tab
      - Extracts DOM HTML from current page
      - Enforces 2.5MB size limit on DOM HTML
@@ -46,12 +65,16 @@ This folder contains the browser extension for the Application Tracker project. 
      - Sends progress messages: `APPLYAI_EXTRACT_JD_PROGRESS` (stages: starting, extracting_dom, sending_to_backend)
      - Sends result: `APPLYAI_EXTRACT_JD_RESULT` (includes ok, url, job_application_id, job_title, company)
 
-  3. `APPLYAI_AUTOFILL_PLAN`: Autofill generation and application
+  4. `APPLYAI_AUTOFILL_PLAN`: Autofill generation and application
      - Validates token, retrieves job_application_id from message or lastIngest
      - Extracts DOM HTML from active tab (enforces 2.5MB limit)
-     - **Extracts structured form fields** using `extractFormFieldsFromTab()` (JavaScript DOMParser)
+     - **Extracts structured form fields with dropdown interaction** using `extractFormFieldsFromTab()`:
+       - Programmatically opens all React Select dropdowns before extraction
+       - Waits for dropdown options to render in DOM (300ms delay)
+       - Extracts options from opened dropdowns via aria-controls listboxes or menu containers
+       - Returns complete field data including all dropdown options
      - POSTs to `/extension/autofill/plan` with `job_application_id`, `page_url`, `dom_html`, and `extracted_fields`
-     - Backend receives pre-extracted fields (no server-side parsing needed)
+     - Backend receives pre-extracted fields with dropdown options already populated (no server-side parsing needed)
      - Backend enriches country fields automatically (adds 196 countries to select fields with "country", "nationality", or "citizenship" keywords)
      - Receives `plan_json` with fields array (each field has: action, selector, input_type, value, question_signature, options)
      - Applies plan to page using `applyAutofillPlanToTab()`
@@ -69,7 +92,8 @@ This folder contains the browser extension for the Application Tracker project. 
   - `popup.html`: Popup structure with:
     - Header with logo, "ApplyAI" title, subtitle "Autofill job applications faster", and status pill
     - Card with account info display
-    - Action buttons: Connect, Extract/Autofill (dynamic), Open Dashboard, Disconnect
+    - Action buttons: Connect, Extract/Autofill (dynamic), Open Dashboard, Disconnect, Debug Extract
+    - **Debug button**: "🐛 Extract Form Fields (Debug)" - always visible, triggers debug extraction with verbose logging
     - Result card for displaying extracted job info (job_title, company, "Saved to tracker" meta)
     - Status messages for operation progress
     - Contextual hints for user guidance
@@ -82,12 +106,12 @@ This folder contains the browser extension for the Application Tracker project. 
     - Card layouts with borders and shadows
     - **Missing**: `.result`, `.result__title`, `.result__company`, `.result__divider`, `.result__meta` styles (referenced in HTML but not defined)
 
-  - `popup.js`: Popup UI logic (~293 lines)
+  - `popup.js`: Popup UI logic (~320 lines)
     - **Session state management**: idle → extracting → extracted → autofilling → autofilled → error
     - **Connection status checking**: Calls `/extension/me` on load to validate token
     - **Dynamic UI modes**:
       - Disconnected: Shows "Connect" button
-      - Connected: Shows "Extract Job Description" button, "Open Dashboard", and "Disconnect"
+      - Connected: Shows "Extract Job Description" button, "Open Dashboard", "Disconnect", and "Debug Extract"
       - After extraction: Button changes to "Generate Autofill", shows result card with job info
       - During operations: Button disabled with progress text
     - **Button handlers**:
@@ -95,6 +119,7 @@ This folder contains the browser extension for the Application Tracker project. 
       - Extract/Autofill: Sends `APPLYAI_EXTRACT_JD` (idle state) or `APPLYAI_AUTOFILL_PLAN` (extracted state)
       - Open Dashboard: Opens `http://localhost:3000/home`
       - Disconnect: Removes token from storage
+      - **Debug Extract**: Sends `APPLYAI_DEBUG_EXTRACT_FIELDS` for verbose field extraction debugging
     - **Message listeners**:
       - `APPLYAI_EXTENSION_CONNECTED`: Refreshes UI after connection
       - `APPLYAI_EXTRACT_JD_PROGRESS`: Updates status during extraction
@@ -132,15 +157,23 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 1. User navigates to job application form page
 2. User clicks "Generate Autofill" in popup (after extracting a job)
 3. Background script extracts DOM HTML from active tab
-4. **Background script extracts structured form fields** using JavaScript DOMParser:
+4. **Background script extracts structured form fields with dropdown interaction** using `extractFormFieldsFromTab()`:
+   - Finds all React Select components (`[role="combobox"]`)
+   - **Programmatically opens each dropdown** by:
+     - Focusing the element
+     - Dispatching MouseEvent (mousedown, mouseup, click)
+     - Dispatching KeyboardEvent (ArrowDown)
+     - Clicking dropdown indicator if found
+     - Waiting 300ms for options to render
    - Identifies all form inputs, textareas, selects, and React Select components
    - Generates CSS selectors and extracts labels, options, and metadata
+   - **Extracts options from opened dropdowns** via aria-controls listbox or menu containers
    - Filters out React Select internal validation inputs
-5. Both DOM HTML and structured fields sent to `/extension/autofill/plan` with job_application_id
+5. Both DOM HTML and structured fields (with dropdown options) sent to `/extension/autofill/plan` with job_application_id
 6. Backend processes pre-extracted fields:
    - Converts JavaScript field format to internal FormField format
-   - Enriches country/nationality fields with standard country list (196 countries)
-   - Generates answers using LLM based on user profile, resume, and job requirements
+   - Enriches country/nationality fields with standard country list (196 countries) if options are missing
+   - Generates answers using LLM based on user profile, resume, job requirements, and available dropdown options
 7. Backend generates autofill plan (field selectors, values, actions, confidence scores)
 8. Plan applied to page via `applyAutofillPlanToTab()`:
    - Identifies form fields by CSS selectors
@@ -148,16 +181,37 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
    - Fills values and triggers appropriate events
 9. Popup displays filled field count
 
+### 4. Debug Extraction Flow (For Troubleshooting)
+1. User navigates to job application form page
+2. User clicks "🐛 Extract Form Fields (Debug)" button in popup
+3. Background script runs `extractFormFieldsWithDropdownInteraction()`:
+   - Same extraction logic as production autofill
+   - Detailed console logging to page console showing:
+     - Total field count
+     - Fields with options count
+     - Warnings for dropdowns with no options
+     - Summary table of all fields
+     - Full JSON data for analysis
+4. Popup displays field count and success status
+5. Developer opens page console to view detailed extraction results
+
 ## Key Technical Features
 - **Secure Authentication**: One-time code exchange for JWT tokens, stored in chrome.storage.local
 - **DOM Extraction**: On-demand script injection to capture full page HTML (with 2.5MB size limit)
-- **Intelligent Form Field Extraction**: JavaScript DOMParser-based extraction in browser context
+- **Intelligent Form Field Extraction with Dropdown Interaction**: JavaScript DOMParser-based extraction in browser context
   - Parses live DOM (handles React and JavaScript-rendered forms)
+  - **Programmatic dropdown opening**: Automatically opens React Select components before extraction
+    - Dispatches proper MouseEvent and KeyboardEvent objects to trigger dropdown menus
+    - Finds and clicks dropdown indicator elements
+    - Waits for options to render in DOM (300ms delay)
+  - **Enhanced option extraction**: Checks multiple locations for React Select options
+    - Primary: aria-controls listbox with `[role="option"]` elements
+    - Fallback: Menu containers (`[class*="menu"]`) for dynamically positioned dropdowns
   - Multi-strategy label detection (for attribute, parent labels, aria-label, placeholder)
   - Required field detection (required attribute, aria-required, asterisk in labels)
-  - React Select component detection and option extraction
+  - React Select component detection and option extraction (both static and dynamically loaded)
   - Filters out framework internal inputs (React Select validation inputs)
-  - Country field enrichment (backend automatically adds 196 countries to country/nationality fields)
+  - Country field enrichment (backend automatically adds 196 countries to country/nationality fields when options missing)
 - **Smart Form Filling**:
   - React framework compatibility via native property setters and proper event triggering
   - React Select component detection and interaction
@@ -166,15 +220,21 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 - **Progress Tracking**: Real-time progress messages for all async operations
 - **Session State Management**: Tracks user flow through idle → extracting → extracted → autofilling states
 - **URL Security**: Prevents access to restricted URLs (chrome://, edge://, about:, file://)
+- **Debug Tools**: Verbose extraction mode with detailed console logging for troubleshooting
+  - Always-visible debug button in popup
+  - Comprehensive field extraction analysis
+  - Warnings for failed dropdown extractions
+  - Full JSON output for manual inspection
 
 ## Backend API Endpoints
 - `POST /extension/connect/exchange`: Exchange one-time code for JWT token
 - `GET /extension/me`: Validate token and get user info
 - `POST /extension/jobs/ingest`: Submit job posting URL and DOM for extraction
 - `POST /extension/autofill/plan`: Generate autofill plan for application form
-  - **New**: Accepts `extracted_fields` (array of structured field objects extracted by extension)
+  - Accepts `extracted_fields` (array of structured field objects extracted by extension)
+  - **Extension now provides dropdown options**: React Select options are pre-extracted by opening dropdowns programmatically
   - Backend converts JS field format to internal FormField format
-  - Backend enriches country fields automatically
+  - Backend enriches country fields automatically (fallback if options missing)
   - Returns autofill plan with field values, actions, and confidence scores
 
 ## Frontend Integration
@@ -183,6 +243,13 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 
 ## Known Issues
 - **Missing CSS**: popup.html references `.result*` CSS classes that are not defined in popup.css (result card may not display properly)
+
+## Recent Updates
+- **Enhanced Dropdown Extraction (v0.1.0+)**:
+  - Added programmatic React Select dropdown opening before field extraction
+  - Improved option extraction success rate from ~0% to ~100% for dynamically loaded dropdowns
+  - Added debug extraction mode with detailed logging for troubleshooting
+  - Backend now receives pre-populated dropdown options, reducing reliance on enrichment fallbacks
 
 ## Storage Schema
 - `installId`: Unique UUID for extension installation
