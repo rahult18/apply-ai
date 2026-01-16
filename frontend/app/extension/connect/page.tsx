@@ -1,98 +1,127 @@
-"use client";
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/contexts/AuthContext";
-import { Navbar } from "@/components/Navbar";
-import { Button } from "@/components/ui/button";
+"use client"
+
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Puzzle, CheckCircle2, AlertCircle, Loader2, ArrowRight } from "lucide-react"
 
 export default function ConnectExtensionPage() {
-
-  const { user, loading } = useAuth();
-  const router = useRouter();
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!loading && !user) {
-      router.push("/login");
-    }
-  }, [user, loading, router]);
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle")
+  const [error, setError] = useState<string | null>(null)
 
   const handleAuthenticate = async () => {
-    setStatus("loading");
-    setError(null);
+    setStatus("loading")
+    setError(null)
     try {
-      // Get token from cookies
       const token = document.cookie
         .split("; ")
         .find((row) => row.startsWith("token="))
-        ?.split("=")[1];
+        ?.split("=")[1]
 
       if (!token) {
-        throw new Error("Not authenticated");
+        throw new Error("Not authenticated")
       }
 
-      // Call backend to get one-time code
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/extension/connect/start`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-      });
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/extension/connect/start`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      )
       if (!res.ok) {
-        throw new Error("Failed to get one-time code");
+        throw new Error("Failed to get one-time code")
       }
-      const data = await res.json();
-      const code = data.one_time_code;
+      const data = await res.json()
+      const code = data.one_time_code
 
-      // Post message to extension (window.postMessage)
-      window.postMessage({ type: "APPLYAI_EXTENSION_CONNECT", code }, window.location.origin);
-      console.log("Posted message to extension with code:", code);
+      window.postMessage(
+        { type: "APPLYAI_EXTENSION_CONNECT", code },
+        window.location.origin
+      )
+      console.log("Posted message to extension with code:", code)
 
-      setStatus("success");
-    } catch (err: any) {
-      setError(err.message || "Unknown error");
-      setStatus("error");
+      setStatus("success")
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error"
+      setError(errorMessage)
+      setStatus("error")
     }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <Navbar />
-        <div className="flex flex-col items-center justify-center min-h-[80vh]">
-          <span>Loading...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return null;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <div className="flex flex-col items-center justify-center min-h-[80vh]">
-        {status === "idle" && (
-          <Button onClick={handleAuthenticate}>Authenticate Extension</Button>
-        )}
-        {status === "loading" && <span>Connecting...</span>}
-        {status === "success" && (
-          <div className="flex flex-col items-center">
-            <span className="text-green-600 font-semibold mb-2">Connected! You can close this tab.</span>
+    <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] p-6">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+            <Puzzle className="h-8 w-8 text-primary" />
           </div>
-        )}
-        {status === "error" && (
-          <div className="flex flex-col items-center">
-            <span className="text-red-600 font-semibold mb-2">Failed, retry.</span>
-            {error && <span className="text-xs text-gray-500">{error}</span>}
-            <Button className="mt-2" onClick={handleAuthenticate}>Retry</Button>
-          </div>
-        )}
-      </div>
+          <CardTitle className="text-2xl">Connect Browser Extension</CardTitle>
+          <CardDescription>
+            Link your browser extension to your ApplyAI account for automatic job
+            tracking
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {status === "idle" && (
+            <div className="space-y-4">
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>Make sure you have:</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Installed the ApplyAI browser extension</li>
+                  <li>The extension popup is open</li>
+                </ul>
+              </div>
+              <Button onClick={handleAuthenticate} className="w-full" size="lg">
+                Connect Extension
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+          )}
+
+          {status === "loading" && (
+            <div className="flex flex-col items-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
+              <p className="text-muted-foreground">Connecting to extension...</p>
+            </div>
+          )}
+
+          {status === "success" && (
+            <div className="flex flex-col items-center py-8 text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+                <CheckCircle2 className="h-8 w-8 text-green-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-green-600 mb-2">
+                Successfully Connected!
+              </h3>
+              <p className="text-muted-foreground">
+                Your extension is now linked to your account. You can close this
+                tab and start tracking jobs.
+              </p>
+            </div>
+          )}
+
+          {status === "error" && (
+            <div className="flex flex-col items-center py-8 text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
+                <AlertCircle className="h-8 w-8 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-red-600 mb-2">
+                Connection Failed
+              </h3>
+              <p className="text-muted-foreground mb-4">
+                {error || "Something went wrong. Please try again."}
+              </p>
+              <Button onClick={handleAuthenticate} variant="outline">
+                Try Again
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
-  );
+  )
 }

@@ -80,19 +80,36 @@ def get_current_user(authorization: str = Header(None)):
     try:
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
-        
+
         token = authorization.split("Bearer ")[1]
-        
+
         # Get user from Supabase using the token
         user_response = supabase.client.auth.get_user(jwt=token)
-        
+
         if user_response.user is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        
+
+        user_id = user_response.user.id
+
+        # Fetch user's name from the users table
+        first_name = None
+        full_name = None
+        try:
+            with supabase.db_connection.cursor() as cursor:
+                cursor.execute("SELECT first_name, full_name FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                if row:
+                    first_name = row[0]
+                    full_name = row[1]
+        except Exception as db_error:
+            logger.warning(f"Could not fetch user name: {str(db_error)}")
+
         # Return user info as expected by frontend
         return {
             "email": user_response.user.email,
-            "id": user_response.user.id
+            "id": user_id,
+            "first_name": first_name,
+            "full_name": full_name
         }
     except HTTPException:
         raise
