@@ -2,8 +2,9 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import Image from "next/image"
 import { useAuth } from "@/contexts/AuthContext"
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
+import { faCloudBolt } from "@fortawesome/free-solid-svg-icons"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -53,13 +54,9 @@ export default function LoginPage() {
       {/* Left side - Branding */}
       <div className="hidden lg:flex lg:w-1/2 bg-primary p-12 flex-col justify-between">
         <div className="flex items-center gap-3">
-          <Image
-            src="/logo.png"
-            alt="ApplyAI"
-            width={40}
-            height={40}
-            className="rounded-lg"
-          />
+          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500">
+            <FontAwesomeIcon icon={faCloudBolt} className="text-white text-xl" />
+          </div>
           <span className="text-2xl font-bold text-white">ApplyAI</span>
         </div>
         <div className="space-y-6">
@@ -84,13 +81,9 @@ export default function LoginPage() {
         <div className="w-full max-w-md space-y-8">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-3 mb-8">
-            <Image
-              src="/logo.png"
-              alt="ApplyAI"
-              width={40}
-              height={40}
-              className="rounded-lg"
-            />
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500">
+              <FontAwesomeIcon icon={faCloudBolt} className="text-white text-xl" />
+            </div>
             <span className="text-2xl font-bold">ApplyAI</span>
           </div>
 

@@ -24,7 +24,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import Image from "next/image"
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faCloudBolt } from '@fortawesome/free-solid-svg-icons'
 import {
   LayoutDashboard,
   User,
@@ -66,13 +67,9 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link href="/home">
-                <Image
-                    src="/logo.png"
-                    alt="ApplyAI"
-                    width={32}
-                    height={32}
-                    className="rounded-lg"
-                  />
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500">
+                    <FontAwesomeIcon icon={faCloudBolt} className="text-white text-lg" />
+                  </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold">ApplyAI</span>
                   <span className="truncate text-xs text-muted-foreground">

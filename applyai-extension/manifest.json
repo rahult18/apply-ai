@@ -3,8 +3,18 @@
     "name": "ApplyAI",
     "version": "0.1.0",
     "description": "Connect ApplyAI to your account.",
+    "icons": {
+        "16": "assets/icon16.png",
+        "48": "assets/icon48.png",
+        "128": "assets/icon128.png"
+    },
     "action": {
         "default_title": "ApplyAI",
+        "default_icon": {
+            "16": "assets/icon16.png",
+            "48": "assets/icon48.png",
+            "128": "assets/icon128.png"
+        },
         "default_popup": "popup/index.html"
     },
     "background": {

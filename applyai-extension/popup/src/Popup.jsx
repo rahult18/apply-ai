@@ -1,4 +1,6 @@
 import React from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faCloudBolt } from '@fortawesome/free-solid-svg-icons';
 import { useExtension } from './hooks/useExtension';
 import StatusPill from './components/StatusPill';
 import StatusMessage from './components/StatusMessage';
@@ -75,8 +77,8 @@ const Popup = () => {
         <header className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
           <div className="flex items-center gap-3">
             {/* Logo */}
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-lg font-bold">A</span>
+            <div className="w-10 h-10 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
+              <FontAwesomeIcon icon={faCloudBolt} className="text-white text-xl" />
             </div>
 
             {/* Title and Status */}

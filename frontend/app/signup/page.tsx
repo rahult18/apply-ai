@@ -15,7 +15,9 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
-import { Briefcase, Loader2, CheckCircle2 } from "lucide-react"
+import { Loader2, CheckCircle2 } from "lucide-react"
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
+import { faCloudBolt } from "@fortawesome/free-solid-svg-icons"
 
 const features = [
   "Automatic job tracking with browser extension",
@@ -59,8 +61,8 @@ export default function SignupPage() {
       {/* Left side - Branding */}
       <div className="hidden lg:flex lg:w-1/2 bg-primary p-12 flex-col justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-white/10">
-            <Briefcase className="h-6 w-6 text-white" />
+          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500">
+            <FontAwesomeIcon icon={faCloudBolt} className="text-white text-xl" />
           </div>
           <span className="text-2xl font-bold text-white">ApplyAI</span>
         </div>
@@ -89,8 +91,8 @@ export default function SignupPage() {
         <div className="w-full max-w-md space-y-8">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-3 mb-8">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary">
-              <Briefcase className="h-6 w-6 text-white" />
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500">
+              <FontAwesomeIcon icon={faCloudBolt} className="text-white text-xl" />
             </div>
             <span className="text-2xl font-bold">ApplyAI</span>
           </div>
