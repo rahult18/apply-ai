@@ -10,7 +10,7 @@ This folder contains the browser extension for the Application Tracker project. 
   - Permissions: `storage`, `tabs`, `activeTab`, `scripting`
   - Host permissions: `http://localhost:3000/*`, `http://localhost:8000/*`
 
-- `background.js`: The main service worker running in the background (~1600+ lines). Key functionality:
+- `background.js`: The main service worker running in the background (~1,650 lines). Key functionality:
   - **Storage helpers**: `storageGet()` and `storageSet()` for Chrome local storage
   - **Install ID management**: `ensureInstallId()` generates and stores a unique installation UUID
   - **Tab interaction**: `getActiveTab()` gets the current active tab
@@ -89,27 +89,47 @@ This folder contains the browser extension for the Application Tracker project. 
 - `assets/`: Directory for static assets (icons, images) used by the extension
 
 - `popup/`: Extension popup UI (React + Vite + Tailwind)
-  - `index.html`: Entry point that loads the built popup.js from Vite
-  - `src/main.jsx`: React entry point that renders Popup component
-  - `src/Popup.jsx`: Main popup component with:
-    - Header with logo, "ApplyAI" title, subtitle "Autofill applications faster", and status pill
-    - Account info display with connection status
-    - Status messages for operation progress
+  - `index.html` (13 lines): Entry point that loads the built popup.js from Vite
+  - `src/main.jsx` (11 lines): React entry point that renders Popup component into #root
+  - `src/Popup.jsx` (194 lines): Main popup component with:
+    - Header with logo (blue-purple gradient badge), "ApplyAI" title, subtitle "Autofill applications faster", and status pill
+    - Account info display with connection status (shows userName or userEmail when connected)
+    - Status messages for operation progress (conditional rendering based on sessionState)
     - Job card display for extracted job info (job_title, company, "Saved to tracker" meta)
+    - Autofill stats display (green success box showing "Filled X fields, skipped Y")
     - Action buttons: Connect, Extract Job/Generate Autofill (dynamic), Dashboard, Debug, Disconnect
-    - Contextual hints for user guidance
-  - `src/style.css`: Tailwind CSS styles (light theme with good contrast)
+    - Contextual hints for user guidance based on current state
+    - Layout: 380px width, 500px min-height, gray background
+  - `src/style.css` (25 lines): Tailwind CSS styles (light theme with good contrast)
   - `src/components/`:
-    - `ActionButton.jsx`: Reusable button component with variants (primary, secondary, danger, ghost)
-      - Primary: Blue background (#0284c7) with white text
-      - Secondary: White background with dark text and border
-      - Danger: Red background with white text
+    - `ActionButton.jsx` (52 lines): Reusable button component with variants (primary, secondary, danger, ghost)
+      - Primary: Blue background (#0284c7) with white text, shadow
+      - Secondary: White background with dark text and gray border
+      - Danger: Red background with white text and red border
       - Ghost: Gray background with dark text
-    - `StatusPill.jsx`: Status indicator with color-coded states (checking, connected, disconnected, error, working)
-    - `StatusMessage.jsx`: Alert/notification component with success/error/info/warning states
-    - `JobCard.jsx`: Card displaying extracted job title and company
+      - Features: Loading state with spinner, disabled state styling, flex layout
+    - `StatusPill.jsx` (24 lines): Status indicator badge with color-coded states
+      - checking: Gray
+      - connected: Green
+      - disconnected: Amber/Yellow
+      - error: Red
+      - working: Blue with pulse animation
+    - `StatusMessage.jsx` (52 lines): Alert/notification component
+      - Types: info, success, error, warning with color-coded backgrounds
+      - Icons: Info circle, check circle, alert circle, warning triangle
+      - Features: Slide-up animation
+    - `JobCard.jsx` (56 lines): Card displaying extracted job information
+      - Job icon (briefcase in blue badge)
+      - Job title (bold, truncated)
+      - Company name (gray text, truncated)
+      - "Saved to tracker" badge with checkmark
+      - Styling: White background, light border, shadow, slide-up animation
   - `src/hooks/`:
-    - `useExtension.js`: Custom hook managing extension state and messaging
+    - `useExtension.js` (202 lines): Custom hook managing extension state and messaging
+      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats
+      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields()
+      - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT
+      - API URLs: APP_BASE_URL (localhost:3000), API_BASE_URL (localhost:8000)
 
 ## Purpose
 This folder provides the browser extension for the Application Tracker project. The extension enables users to:
@@ -230,13 +250,13 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 - **Build Tool**: Vite with React plugin
 - **Build Output**: All files compiled to `dist/` folder (gitignored)
 - **Build Process**:
-  - `vite.config.js` configures build with:
+  - `vite.config.js` (42 lines) configures build with:
     - React plugin for JSX transformation
-    - Copy plugin that copies manifest.json, background.js, and content.js to dist after build
-    - Popup entry point configured to bundle popup.jsx as popup.js
+    - Custom copy plugin that copies manifest.json, background.js, and content.js to dist after build
+    - Popup entry point: `popup/index.html`
     - Output naming: entryFileNames `[name].js`, chunkFileNames `[name].js`, assetFileNames `[name].[ext]`
 - **Development Scripts**:
-  - `npm run dev`: Watch mode - rebuilds automatically on source changes
+  - `npm run dev`: Watch mode (`vite build --watch --mode development`) - rebuilds automatically on source changes
   - `npm run build`: Production build - generates optimized dist folder
   - `npm run preview`: Preview the built extension
 - **Loading in Chrome**:
@@ -244,6 +264,34 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - Go to `chrome://extensions/` → Enable Developer mode
   - Click "Load unpacked" and select the `dist/` folder (not the root folder)
   - Extension reloads on each rebuild
+
+## Configuration Files
+
+- **package.json** (26 lines):
+  - Name: `applyai-extension`, Version: `0.1.0`, Type: `module` (ES modules)
+  - Dependencies: react ^18.2.0, react-dom ^18.2.0
+  - DevDependencies: @tailwindcss/postcss ^4.1.18, @types/chrome ^0.0.254, @vitejs/plugin-react ^4.2.1, autoprefixer ^10.4.23, postcss ^8.5.6, tailwindcss ^4.1.18, vite ^5.0.8
+
+- **tailwind.config.js** (52 lines):
+  - Content paths: `./popup/**/*.{html,js,jsx}`
+  - Custom Colors:
+    - `primary`: Blue scale (50-900) - #f0f9ff to #0c4a6e, primary-600 is #0284c7
+    - `accent`: Purple scale (50-900) - #faf5ff to #581c87, accent-500 is #a855f7
+  - Custom Animations:
+    - `fade-in`: 0.2s ease-in fadeIn
+    - `slide-up`: 0.3s ease-out slideUp
+    - `pulse-subtle`: 3s infinite pulse (cubic-bezier timing)
+  - Custom Keyframes:
+    - `fadeIn`: opacity 0 → 1
+    - `slideUp`: translateY(10px) + opacity 0 → translateY(0) + opacity 1
+
+- **postcss.config.js** (7 lines):
+  - Plugins: @tailwindcss/postcss, autoprefixer
+
+- **style.css** (25 lines):
+  - Imports Tailwind CSS via `@import "tailwindcss";`
+  - Body: background #f9fafb (light gray), color #111827 (dark gray)
+  - Custom scrollbar: 8px width, gray track (#f3f4f6), rounded thumb (#d1d5db → #9ca3af on hover)
 
 ## UI Improvements (v0.1.0+)
 

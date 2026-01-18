@@ -2,14 +2,16 @@
 
 This folder contains the FastAPI backend for the Application Tracker project. It provides RESTful API endpoints for authentication, job scraping, and integration with Supabase and Google Generative AI.
 
+**Total Application Code: ~2,400 lines**
+
 ## Structure
-- `main.py`: Entry point for the FastAPI server. Configures logging to both console and file (in `logs/` directory with timestamps), then uses `uvicorn` to run the `app` from `app.api` on `0.0.0.0:8000`.
+- `main.py` (64 lines): Entry point for the FastAPI server. Contains `build_log_config(log_file: str) -> dict` function for logging configuration. Configures logging to both console and timestamped file (in `logs/` directory as `backend_YYYYMMDD_HHMMSS.log`), then uses `uvicorn` to run the `app` from `app.api` on `0.0.0.0:8000` with hot reload enabled.
 - `requirements.txt`: Python dependencies.
 - `.env` / `.env.example`: Environment variables (Supabase, Google GenAI, JWT secret key, etc.).
 - `app/`: Main application package.
   - `__init__.py`: Package initializer.
-  - `api.py`: Configures the FastAPI application, sets up CORS middleware (allows `http://localhost:3000`), and includes all API routers. It also defines a health check endpoint at `/`.
-  - `models.py`: Defines Pydantic models for request bodies and data structures:
+  - `api.py` (41 lines): Configures the FastAPI application, sets up CORS middleware (allows `http://localhost:3000`), and includes three routers (`/auth`, `/db`, `/extension`). Defines health check endpoint at `GET /` returning `{"status": "ok"}`.
+  - `models.py` (186 lines): Defines Pydantic models for request bodies and data structures:
     - `JD`: Represents a job description with fields like `job_title`, `company`, `job_description`, `required_skills`, etc.
     - `RequestBody`: Used for authentication (e.g., `email`, `password`).
     - `UpdateProfileBody`: Used for updating user profile information.
@@ -21,9 +23,9 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `AutofillPlanRequest`: Request model for autofill plan generation with `job_application_id`, `page_url`, `dom_html`, and **`extracted_fields`** (list of ExtractedFormField objects pre-extracted by extension).
     - `AutofillPlanResponse`: Response model containing `run_id`, `status`, `plan_json`, and `plan_summary`.
     - `AutofillEventRequest`, `AutofillFeedbackRequest`, `AutofillSubmitRequest`: Models for autofill telemetry and feedback.
-    - `AutofillAgentInput`: Comprehensive input model for the autofill agent DAG, containing job details, user profile, resume data, DOM HTML, and **`extracted_fields`**.
-    - `AutofillAgentOutput`: Output model from the autofill agent with status and plan information.
-  - `utils.py`: Contains utility functions:
+    - `AutofillAgentInput`: Comprehensive input model for the autofill agent DAG, containing run metadata, application page details, job details, and user details (profile + resume).
+    - `AutofillAgentOutput`: Output model from the autofill agent with status, plan_json, and plan_summary.
+  - `utils.py` (307 lines): Contains utility functions:
     - `extract_jd`: Extracts structured job description data from raw HTML content using the LLM service.
     - `clean_content`: Cleans HTML content by removing script/style tags, JavaScript, and normalizing whitespace.
     - `normalize_url`: Normalizes URLs by removing tracking parameters, fragments, and normalizing casing and trailing slashes.
@@ -31,38 +33,51 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `parse_resume`: Parses a user's resume (PDF) using an LLM and updates the user's profile in the database with the extracted information.
     - `check_if_job_application_belongs_to_user`: Verifies that a job application ID belongs to a specific user.
     - `check_if_run_id_belongs_to_user`: Verifies that an autofill run ID belongs to a specific user.
-  - `dag_utils.py`: Contains DAG-related utilities for autofill agent:
-    - Type definitions: `FormField`, `FormFieldAnswer`, `PlanField`, `AutofillPlanJSON`, `AutofillPlanSummary`, `LLMAnswersResponse`.
-    - `convert_js_fields_to_form_fields`: Converts pre-extracted form fields from browser extension's JavaScript DOMParser to internal FormField format. Maps JS field properties (type, inputType, name, id, label, selector, options) to Python FormField structure.
+  - `dag_utils.py` (296 lines): Contains DAG-related utilities for autofill agent:
+    - **Enums**: `InputType` (text, textarea, select, radio, checkbox, date, number, email, password, file, tel, url, hidden, unknown), `AnswerAction` (autofill, suggest, skip), `RunStatus` (running, completed, failed).
+    - **TypedDicts**: `FormField` (question_signature, label, input_type, required, options, selector), `FormFieldAnswer` (value, source, confidence 0.0-1.0, action), `PlanField`, `AutofillPlanJSON`, `AutofillPlanSummary`.
+    - **Pydantic Models**: `LLMAnswerItem` (value, action, confidence, source), `LLMAnswersResponse` (dict of answers keyed by field signature).
+    - **Constants**: `STANDARD_COUNTRIES` - Array of 195+ country names for enriching country select fields.
+    - `convert_js_fields_to_form_fields`: Converts pre-extracted form fields from browser extension's JavaScript DOMParser to internal FormField format. Maps JS field properties (type, inputType, name, id, label, selector, options) to Python FormField structure. Handles deduplication by question_signature.
     - `_enrich_country_fields`: Automatically enriches select fields containing "country", "nationality", or "citizenship" keywords with a standard list of 196 countries (useful when React Select components have empty options in static DOM).
-    - `build_autofill_plan`: Builds an autofill plan JSON from form fields and answers.
+    - `build_autofill_plan`: Builds an autofill plan JSON from form fields and answers. Normalizes answer data and includes confidence scores.
     - `summarize_autofill_plan`: Summarizes an autofill plan with counts of autofilled, suggested, and skipped fields.
+    - `_normalize_answer`: Ensures answer has valid action, source, confidence values clamped to 0.0-1.0.
   - `routes/`: API route handlers.
-    - `auth.py`: Handles user authentication:
-      - `POST /auth/signup`: Registers a new user with email and password, stores user in Supabase, and returns a session token or a message for email confirmation.
-      - `POST /auth/login`: Authenticates a user with email and password, and returns a session token.
-      - `GET /auth/me`: Retrieves current user information using a Bearer token.
-    - `db.py`: Handles database interactions related to user profiles and job applications:
-      - `GET /db/get-profile`: Retrieves the user's profile information from the `users` table, including a signed URL for their resume if available in Supabase storage.
-      - `GET /db/get-all-applications`: Fetches all job applications for the current user from the `job_applications` table.
-      - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload. Triggers background task to parse resume using LLM.
-    - `extension.py`: Handles authentication, connection, and autofill functionality for the browser extension:
-      - `POST /extension/connect/start`: Generates a one-time code for the authenticated user to connect the browser extension. The code is hashed and stored with an expiration.
-      - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token specifically for the browser extension.
-      - `GET /extension/me`: Retrieves user information (email, id, full_name) using the extension's JWT token.
-      - `POST /extension/jobs/ingest`: Ingests a job application either by scraping a provided `job_link` or by extracting information from `dom_html` provided by the extension. It cleans the content, extracts structured data using the LLM service, normalizes the URL, infers job site type, and stores the job application in the `job_applications` table for the authenticated user.
-      - `POST /extension/autofill/plan`: Generates an autofill plan for a job application form. Receives pre-extracted form fields from the browser extension (extracted using JavaScript DOMParser), checks for existing plans with matching DOM hash, or creates a new autofill run and invokes the DAG agent to convert fields to internal format, enrich country fields, generate answers using LLM with user/job/resume context, and assemble the autofill plan.
-      - `POST /extension/autofill/event`: Logs autofill events (user interactions, errors, etc.) to the `autofill_events` table for telemetry.
-      - `POST /extension/autofill/feedback`: Submits user feedback/corrections for autofill answers to the `autofill_feedback` table for model improvement.
-      - `POST /extension/autofill/submit`: Marks an autofill run as 'submitted' and updates the corresponding job application status to 'applied'.
+    - `auth.py` (118 lines): Handles user authentication:
+      - `POST /auth/signup`: Registers a new user with email and password, creates Supabase auth user, inserts row into `public.users` table, and returns a session token or a message for email confirmation.
+      - `POST /auth/login`: Authenticates a user with email and password, returns access_token and user info (email, id).
+      - `GET /auth/me`: Retrieves current user information using a Bearer token. Fetches from `auth.users` and `public.users` tables, returns email, id, first_name, full_name.
+    - `db.py` (311 lines): Handles database interactions related to user profiles and job applications:
+      - `GET /db/get-profile`: Retrieves the user's profile information from the `users` table, including a signed URL (1 hour expiry) for their resume if available in Supabase storage. Handles multiple signed URL response formats from Supabase SDK.
+      - `GET /db/get-all-applications`: Fetches all job applications for the current user from the `job_applications` table ordered by created_at DESC. Converts tuples to dictionaries for JSON response.
+      - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload to `user-documents` bucket (path: `resumes/{user_id}/{filename}`). Constructs dynamic UPDATE query with only provided fields. Triggers background task to parse resume using LLM. Sets resume_parse_status to "In progress" on update. Rollback: deletes uploaded file if DB update fails.
+    - `extension.py` (496 lines): Handles authentication, connection, and autofill functionality for the browser extension:
+      - `POST /extension/connect/start`: Generates a one-time code (32 char urlsafe) for the authenticated user to connect the browser extension. Stores SHA256 hash in `public.extension_connect_codes` with 10-minute expiration. Returns plaintext code.
+      - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token (180 min expiry) with claims: sub (user_id), exp, iss (applyai-api), aud (applyai-extension), install_id. Marks code as used.
+      - `GET /extension/me`: Retrieves user information (email, id, full_name) using the extension's JWT token. Decodes JWT with audience validation.
+      - `POST /extension/jobs/ingest`: Ingests a job application. Normalizes URL to prevent duplicates, checks if job already exists (returns cached data if so). If new: fetches content from URL (if no DOM provided) or uses provided DOM, extracts JD using LLM, creates `public.job_applications` record. Returns job_application_id, url, job_title, company.
+      - `POST /extension/autofill/plan`: Generates an autofill plan for a job application form. Validates ownership of job_application_id. Checks for cached plan by dom_html hash + page_url (returns existing if found). If new: creates `public.autofill_runs` record with status='running', assembles AutofillAgentInput with JD and user data, invokes DAG agent. Returns run_id, status, plan_json, plan_summary.
+      - `POST /extension/autofill/event`: Logs autofill events to `public.autofill_events` table for telemetry. Validates ownership of run_id. Returns {"status": "success"}.
+      - `POST /extension/autofill/feedback`: Submits user feedback/corrections for autofill answers to `public.autofill_feedback` table. Validates ownership of run_id. Returns {"status": "success"}.
+      - `POST /extension/autofill/submit`: Marks autofill run as 'submitted' in `public.autofill_runs`, updates corresponding job_application status to 'applied', logs 'application_submitted' event. Returns {"status": "success"}.
   - `services/`: Service layer for external integrations and agents.
-    - `llm.py`: Integrates with Google Generative AI (Gemini 2.5 Flash) for tasks like job description extraction, resume parsing, and autofill answer generation.
-    - `supabase.py`: Provides a client for interacting with Supabase, including authentication and database operations using `psycopg2` for direct database connections.
-    - `autofill_agent_dag.py`: Implements the autofill agent as a LangGraph DAG with four nodes:
-      - `initialize_node`: Initializes the DAG state with input data.
-      - `extract_form_fields_node`: Converts pre-extracted fields from browser extension's JavaScript DOMParser to internal FormField format using `dag_utils.convert_js_fields_to_form_fields`. Automatically enriches country/nationality/citizenship fields with 196 standard countries.
-      - `generate_answers_node`: Generates answers for form fields using Gemini 2.5 Flash with structured JSON output. Sends user context, job context, resume profile, and form field specifications to LLM. Performs option matching for select/radio/checkbox fields.
-      - `assemble_autofill_plan_node`: Builds the final autofill plan JSON and summary, then updates the `autofill_runs` table in the database.
+    - `llm.py` (9 lines): Initializes Google Generative AI client. Model used: `gemini-2.5-flash`.
+    - `supabase.py` (32 lines): Provides a `Supabase` class with `db_connection` (psycopg2 PostgreSQL connection) and `client` (Supabase SDK for auth/storage).
+    - `autofill_agent_dag.py` (542 lines): Implements the autofill agent as a LangGraph StateGraph DAG.
+
+      **DAG Flow**: `START → initialize → extract_form_fields → generate_answers → assemble_autofill_plan → END`
+
+      **State Definition (AutofillAgentState)**:
+      - input_data, run_id, page_url, form_fields, answers (dict keyed by question_signature), plan_json, plan_summary, status (running|completed|failed), errors (list)
+
+      **Nodes**:
+      - `initialize_node`: Extracts run_id and page_url from input_data, initializes empty state.
+      - `extract_form_fields_node`: Converts pre-extracted fields from browser extension's JavaScript DOMParser to internal FormField format using `dag_utils.convert_js_fields_to_form_fields`. Handles field deduplication by question_signature. Logs field labels for debugging. Error handling with graceful failures.
+      - `generate_answers_node` (229 lines, most complex): Builds context objects (user_ctx: profile fields; job_ctx: job details; resume_ctx: parsed resume). Constructs structured JSON prompt for Gemini with rules for select/radio/checkbox fields and confidence scoring. Post-processes LLM response: normalizes text for option matching, performs fuzzy matching for select options, validates confidence scores (clamped 0.0-1.0), maps values to actual options. Logs action counts (autofill/suggest/skip) and confidence levels.
+      - `assemble_autofill_plan_node`: Builds final AutofillPlanJSON from form_fields + answers, generates AutofillPlanSummary statistics. Persists plan to database: updates `public.autofill_runs` with plan_json, plan_summary, status, updated_at. Sets status to "completed" or "failed" based on errors.
+
+      **Key Features**: Pre-extracted fields from browser, LLM-powered intelligent answers, confidence scoring (0.0-1.0), source tracking (profile|resume|jd|llm|unknown), fuzzy option matching, graceful error handling, comprehensive logging.
 
 ## Services
 - **Authentication**: User signup, login, and user info managed via Supabase's authentication service. Extension authentication uses custom JWT tokens with one-time code exchange.
@@ -109,3 +124,62 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - Database operations use direct `psycopg2` connections for better control and transaction management.
 - Resume parsing and autofill plan generation are resource-intensive operations that use LLM API calls.
 - The system supports multiple job board types: LinkedIn, Y Combinator, job boards (Greenhouse, Ashby, Lever), and generic careers pages.
+
+## Database Schema References
+
+Tables referenced in code:
+- `auth.users` - Supabase authentication (managed by Supabase)
+- `public.users` - User profiles and resume data (first_name, full_name, resume_url, resume_parse_status, etc.)
+- `public.job_applications` - Job postings with normalized_url and jd_dom_html
+- `public.extension_connect_codes` - One-time codes for extension pairing (code_hash, expires_at, used)
+- `public.autofill_runs` - Autofill execution history (dom_html_hash, plan_json, plan_summary, status)
+- `public.autofill_events` - Event logs for autofill runs (run_id, event_type, payload)
+- `public.autofill_feedback` - User corrections to autofill answers (run_id, question_signature, correction)
+
+## Dependencies (requirements.txt)
+
+**Core Framework:**
+- fastapi, uvicorn, python-multipart
+
+**AI/ML:**
+- google-genai (Gemini models)
+- langgraph (DAG orchestration)
+- langchain (LLM utilities)
+
+**Database:**
+- supabase (Auth + Storage SDK)
+- psycopg2-binary (PostgreSQL client)
+- sqlalchemy
+
+**Data Processing:**
+- pydantic (Data validation)
+- fitz / pymupdf (PDF parsing)
+- beautifulsoup4 (HTML parsing)
+- requests, aiohttp (HTTP clients)
+
+**Utilities:**
+- python-dotenv (Environment variables)
+- python-jose (JWT encoding/decoding)
+- tiktoken (Token counting)
+- jsonschema (JSON validation)
+- tenacity (Retry logic)
+- cssselect (CSS selectors)
+
+## Environment Variables
+
+```
+# Supabase
+SUPABASE_URL=
+SUPABASE_KEY=
+
+# Database (PostgreSQL direct connection)
+DB_NAME=
+DB_USER=
+DB_PASSWORD=
+DB_HOST=
+DB_PORT=
+
+# JWT/Security
+SECRET_KEY=
+ALGORITHM=
+```
