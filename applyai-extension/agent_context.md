@@ -91,14 +91,21 @@ This folder contains the browser extension for the Application Tracker project. 
 - `popup/`: Extension popup UI (React + Vite + Tailwind)
   - `index.html` (13 lines): Entry point that loads the built popup.js from Vite
   - `src/main.jsx` (11 lines): React entry point that renders Popup component into #root
-  - `src/Popup.jsx` (194 lines): Main popup component with:
+  - `src/Popup.jsx` (~270 lines): Main popup component with:
     - Header with logo (blue-purple gradient badge), "ApplyAI" title, subtitle "Autofill applications faster", and status pill
     - Account info display with connection status (shows userName or userEmail when connected)
     - Status messages for operation progress (conditional rendering based on sessionState)
     - Job card display for extracted job info (job_title, company, "Saved to tracker" meta)
     - Autofill stats display (green success box showing "Filled X fields, skipped Y")
-    - Action buttons: Connect, Extract Job/Generate Autofill (dynamic), Dashboard, Debug, Disconnect
-    - Contextual hints for user guidance based on current state
+    - **Page type indicator**: Shows current page context (📄 Job Description Page, 📝 Application Form Page, 📄 Job Page (Single Page))
+    - **Dynamic action buttons** based on job status:
+      - No job found + JD page → "Extract JD" button
+      - No job found + application page → "Extract JD First" (disabled, with hint)
+      - Job found + jd_extracted → "Generate Autofill" button
+      - Job found + autofill_generated → "Autofill Again" button
+    - **Applied badge**: Shows green checkmark badge when job is marked as applied
+    - Secondary buttons: Dashboard, Debug, Disconnect
+    - Contextual hints for user guidance based on current state and page type
     - Layout: 380px width, 500px min-height, gray background
   - `src/style.css` (25 lines): Tailwind CSS styles (light theme with good contrast)
   - `src/components/`:
@@ -125,10 +132,13 @@ This folder contains the browser extension for the Application Tracker project. 
       - "Saved to tracker" badge with checkmark
       - Styling: White background, light border, shadow, slide-up animation
   - `src/hooks/`:
-    - `useExtension.js` (202 lines): Custom hook managing extension state and messaging
-      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats
-      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields()
+    - `useExtension.js` (~275 lines): Custom hook managing extension state and messaging
+      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats, **jobStatus**, **isCheckingStatus**
+      - SessionState values: idle, extracting, extracted, autofilling, autofilled, **applied**, error
+      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields(), **checkJobStatus()**
+      - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Auto-refreshes after JD extraction.
       - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT
+      - Initialization: Checks connection on mount, then checks job status if connected
       - API URLs: APP_BASE_URL (localhost:3000), API_BASE_URL (localhost:8000)
 
 ## Purpose
@@ -222,7 +232,12 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - Text normalization and synonym matching for robust option selection
   - Support for multiple input types with appropriate handling
 - **Progress Tracking**: Real-time progress messages for all async operations
-- **Session State Management**: Tracks user flow through idle → extracting → extracted → autofilling states
+- **Session State Management**: Tracks user flow through idle → extracting → extracted → autofilling → autofilled → applied states
+- **Job Status Awareness**: On popup open, calls `/extension/jobs/status` to check current page context:
+  - Detects job board type (Lever, Ashby, Greenhouse) and page type (JD page vs application form)
+  - For Lever/Ashby: Matches application form URLs (with `/apply` or `/application` suffix) to base JD URLs
+  - Restores job context (title, company) and application state from server
+  - Enables smart button display based on page type and job state
 - **URL Security**: Prevents access to restricted URLs (chrome://, edge://, about:, file://)
 - **Debug Tools**: Verbose extraction mode with detailed console logging for troubleshooting
   - Always-visible debug button in popup
@@ -234,6 +249,11 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 - `POST /extension/connect/exchange`: Exchange one-time code for JWT token
 - `GET /extension/me`: Validate token and get user info
 - `POST /extension/jobs/ingest`: Submit job posting URL and DOM for extraction
+- `POST /extension/jobs/status`: Check job application status by URL
+  - Accepts `url` (current tab URL)
+  - Detects job board type (Lever, Ashby, Greenhouse) and page type (jd, application, combined)
+  - For Lever/Ashby: Strips `/apply` or `/application` suffix to match base JD URL
+  - Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`
 - `POST /extension/autofill/plan`: Generate autofill plan for application form
   - Accepts `extracted_fields` (array of structured field objects extracted by extension)
   - **Extension now provides dropdown options**: React Select options are pre-extracted by opening dropdowns programmatically

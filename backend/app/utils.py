@@ -305,3 +305,72 @@ def check_if_run_id_belongs_to_user(run_id: str, user_id: str, supabase: Supabas
     except Exception as e:
         logger.error(f"Error checking autofill run ownership for run_id {run_id} and user_id {user_id}: {str(e)}")
         return False
+
+
+def extract_job_url_info(url: str) -> dict:
+    """
+    Extract job board type, base URL, and page type from a job URL.
+
+    For Lever: strips /apply suffix
+    For Ashby: strips /application suffix
+    For Greenhouse: single page (combined)
+
+    :param url: The job URL to analyze
+    :return: dict with keys: job_board, base_url, page_type
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.netloc.lower()
+        path = parsed.path
+
+        # Detect job board and determine page type
+        if "jobs.lever.co" in hostname:
+            job_board = "lever"
+            if path.rstrip('/').endswith('/apply'):
+                page_type = "application"
+                # Strip /apply from path to get base URL
+                base_path = path.rstrip('/').rsplit('/apply', 1)[0]
+            else:
+                page_type = "jd"
+                base_path = path
+        elif "jobs.ashbyhq.com" in hostname:
+            job_board = "ashby"
+            if path.rstrip('/').endswith('/application'):
+                page_type = "application"
+                # Strip /application from path to get base URL
+                base_path = path.rstrip('/').rsplit('/application', 1)[0]
+            else:
+                page_type = "jd"
+                base_path = path
+        elif "boards.greenhouse.io" in hostname or "job-boards.greenhouse.io" in hostname:
+            job_board = "greenhouse"
+            page_type = "combined"
+            base_path = path
+        else:
+            job_board = "other"
+            page_type = "unknown"
+            base_path = path
+
+        # Reconstruct base URL with normalized path
+        base_url = urlunparse((
+            parsed.scheme.lower(),
+            hostname,
+            base_path.rstrip('/') or '/',
+            '',  # params
+            '',  # query (strip for matching)
+            ''   # fragment
+        ))
+
+        return {
+            "job_board": job_board,
+            "base_url": base_url,
+            "page_type": page_type
+        }
+
+    except Exception as e:
+        logger.warning(f"Failed to extract job URL info from {url}: {str(e)}")
+        return {
+            "job_board": "unknown",
+            "base_url": url,
+            "page_type": "unknown"
+        }

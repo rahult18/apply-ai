@@ -1,6 +1,6 @@
 from fastapi import File
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 
 class JD(BaseModel):
     job_title: str
@@ -95,11 +95,11 @@ class ExtractedFormField(BaseModel):
     label: Optional[str] = None
     placeholder: Optional[str] = None
     required: bool = False
-    value: Optional[str] = None
+    value: Optional[Any] = None  # Can be string or boolean
     selector: str
     autocomplete: Optional[str] = None
     isCombobox: Optional[bool] = False
-    options: list[dict[str, str]] = []  # [{value: str, label: str}]
+    options: list[dict[str, Any]] = []  # [{value: str, label: str, checked?: bool}]
     maxLength: Optional[int] = None
 
 class AutofillPlanRequest(BaseModel):
@@ -184,3 +184,16 @@ class AutofillAgentOutput(BaseModel):
     status: str
     plan_json: Optional[dict] = None
     plan_summary: Optional[dict] = None
+
+
+class JobStatusRequest(BaseModel):
+    url: str
+
+
+class JobStatusResponse(BaseModel):
+    found: bool
+    page_type: str  # "jd" | "application" | "combined" | "unknown"
+    state: Optional[str] = None  # "jd_extracted" | "autofill_generated" | "applied"
+    job_application_id: Optional[str] = None
+    job_title: Optional[str] = None
+    company: Optional[str] = None

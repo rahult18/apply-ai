@@ -16,6 +16,8 @@ const Popup = () => {
     statusMessage,
     extractedJob,
     autofillStats,
+    jobStatus,
+    isCheckingStatus,
     connect,
     disconnect,
     openDashboard,
@@ -30,8 +32,14 @@ const Popup = () => {
     if (connectionStatus === 'error') return { status: 'error', text: 'Error' };
     if (connectionStatus === 'disconnected') return { status: 'disconnected', text: 'Not connected' };
 
+    if (isCheckingStatus) {
+      return { status: 'checking', text: 'Loading...' };
+    }
     if (sessionState === 'extracting' || sessionState === 'autofilling') {
       return { status: 'working', text: 'Working' };
+    }
+    if (sessionState === 'applied') {
+      return { status: 'connected', text: 'Applied' };
     }
     if (sessionState === 'extracted' || sessionState === 'autofilled') {
       return { status: 'connected', text: 'Ready' };
@@ -47,7 +55,7 @@ const Popup = () => {
 
   // Determine status message type
   const getMessageType = () => {
-    if (sessionState === 'extracted' || sessionState === 'autofilled') return 'success';
+    if (sessionState === 'extracted' || sessionState === 'autofilled' || sessionState === 'applied') return 'success';
     if (sessionState === 'error') return 'error';
     if (sessionState === 'extracting' || sessionState === 'autofilling') return 'info';
     return 'info';
@@ -58,14 +66,32 @@ const Popup = () => {
     if (connectionStatus !== 'connected') {
       return 'Connect to sync your profile and autofill preferences';
     }
-    if (sessionState === 'idle') {
-      return 'Navigate to a job posting page, then click Extract Job';
+    if (isCheckingStatus) {
+      return 'Checking job status...';
     }
+
+    const pageType = jobStatus?.page_type;
+    const isApplicationPage = pageType === 'application';
+    const isJdPage = pageType === 'jd' || pageType === 'combined';
+
+    if (!jobStatus?.found) {
+      if (isApplicationPage) {
+        return 'Navigate to the job description page first to extract the JD';
+      }
+      return 'Click "Extract JD" to save this job posting';
+    }
+
     if (sessionState === 'extracted') {
-      return 'Open the application form, then click Generate Autofill';
+      if (isJdPage && pageType !== 'combined') {
+        return 'Navigate to the application form, then click Generate Autofill';
+      }
+      return 'Click "Generate Autofill" to fill the application form';
     }
     if (sessionState === 'autofilled') {
       return 'Review the filled form before submitting';
+    }
+    if (sessionState === 'applied') {
+      return 'You have already applied to this job';
     }
     return '';
   };
@@ -145,18 +171,80 @@ const Popup = () => {
           <div className="space-y-2 pt-1">
             {connectionStatus === 'connected' ? (
               <>
+                {/* Page Type Indicator */}
+                {jobStatus?.page_type && jobStatus.page_type !== 'unknown' && (
+                  <div className="flex items-center justify-center gap-2 text-xs text-gray-500 pb-1">
+                    <span className="inline-flex items-center gap-1">
+                      {jobStatus.page_type === 'jd' && '📄 Job Description Page'}
+                      {jobStatus.page_type === 'application' && '📝 Application Form Page'}
+                      {jobStatus.page_type === 'combined' && '📄 Job Page (Single Page)'}
+                    </span>
+                  </div>
+                )}
+
                 {/* Primary Action Button */}
-                <ActionButton
-                  onClick={sessionState === 'idle' ? extractJob : generateAutofill}
-                  loading={sessionState === 'extracting' || sessionState === 'autofilling'}
-                  disabled={sessionState === 'extracting' || sessionState === 'autofilling'}
-                  variant="primary"
-                >
-                  {sessionState === 'extracting' && 'Extracting...'}
-                  {sessionState === 'autofilling' && 'Generating...'}
-                  {(sessionState === 'idle' || sessionState === 'error') && 'Extract Job'}
-                  {(sessionState === 'extracted' || sessionState === 'autofilled') && 'Generate Autofill'}
-                </ActionButton>
+                {(() => {
+                  const isWorking = sessionState === 'extracting' || sessionState === 'autofilling';
+                  const pageType = jobStatus?.page_type;
+                  const isApplicationPage = pageType === 'application';
+                  const jobFound = jobStatus?.found;
+
+                  // Show Extract JD button if no job found and not on application page
+                  if (!jobFound && !isApplicationPage) {
+                    return (
+                      <ActionButton
+                        onClick={extractJob}
+                        loading={sessionState === 'extracting'}
+                        disabled={isWorking || isCheckingStatus}
+                        variant="primary"
+                      >
+                        {sessionState === 'extracting' ? 'Extracting...' : 'Extract JD'}
+                      </ActionButton>
+                    );
+                  }
+
+                  // If on application page but no JD extracted yet, show disabled button with hint
+                  if (!jobFound && isApplicationPage) {
+                    return (
+                      <ActionButton
+                        disabled={true}
+                        variant="secondary"
+                      >
+                        Extract JD First
+                      </ActionButton>
+                    );
+                  }
+
+                  // Job found - show Generate Autofill or Autofill Again
+                  const buttonText = sessionState === 'autofilling'
+                    ? 'Generating...'
+                    : sessionState === 'autofilled' || jobStatus?.state === 'autofill_generated'
+                      ? 'Autofill Again'
+                      : 'Generate Autofill';
+
+                  return (
+                    <ActionButton
+                      onClick={generateAutofill}
+                      loading={sessionState === 'autofilling'}
+                      disabled={isWorking || isCheckingStatus}
+                      variant="primary"
+                    >
+                      {buttonText}
+                    </ActionButton>
+                  );
+                })()}
+
+                {/* Applied Badge */}
+                {sessionState === 'applied' && (
+                  <div className="flex items-center justify-center gap-2 py-2">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-100 text-green-700 text-sm font-medium">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Applied
+                    </span>
+                  </div>
+                )}
 
                 {/* Secondary Actions */}
                 <div className="grid grid-cols-2 gap-2">

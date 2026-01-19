@@ -19,6 +19,8 @@ export const useExtension = () => {
   const [statusMessage, setStatusMessage] = useState('');
   const [extractedJob, setExtractedJob] = useState(null);
   const [autofillStats, setAutofillStats] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null); // Response from /jobs/status endpoint
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
   // Check connection status
   const checkConnection = useCallback(async () => {
@@ -45,9 +47,71 @@ export const useExtension = () => {
       setUserEmail(userData?.email || '');
       setUserName(userData?.full_name || '');
       setConnectionStatus('connected');
+      return true; // Return true to indicate successful connection
     } catch (e) {
       console.error('Connection check failed:', e);
       setConnectionStatus('error');
+      return false;
+    }
+  }, []);
+
+  // Check job status for current tab URL
+  const checkJobStatus = useCallback(async () => {
+    try {
+      setIsCheckingStatus(true);
+      const { extensionToken } = await storageGet(['extensionToken']);
+
+      if (!extensionToken) {
+        return;
+      }
+
+      // Get current tab URL
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.url) {
+        return;
+      }
+
+      const res = await fetch(`${API_BASE_URL}/extension/jobs/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${extensionToken}`
+        },
+        body: JSON.stringify({ url: tab.url })
+      });
+
+      if (!res.ok) {
+        console.error('Failed to check job status:', res.status);
+        return;
+      }
+
+      const status = await res.json();
+      setJobStatus(status);
+
+      // Update session state and extracted job based on status
+      if (status.found) {
+        setExtractedJob({
+          title: status.job_title,
+          company: status.company
+        });
+
+        // Set session state based on application state
+        if (status.state === 'applied') {
+          setSessionState('applied');
+        } else if (status.state === 'autofill_generated') {
+          setSessionState('autofilled');
+        } else if (status.state === 'jd_extracted') {
+          setSessionState('extracted');
+        }
+      } else {
+        // No job found for this URL
+        setExtractedJob(null);
+        setSessionState('idle');
+      }
+    } catch (e) {
+      console.error('Job status check failed:', e);
+    } finally {
+      setIsCheckingStatus(false);
     }
   }, []);
 
@@ -65,6 +129,7 @@ export const useExtension = () => {
     setExtractedJob(null);
     setStatusMessage('');
     setAutofillStats(null);
+    setJobStatus(null);
   }, []);
 
   // Open dashboard
@@ -143,6 +208,8 @@ export const useExtension = () => {
             title: msg.job_title,
             company: msg.company
           });
+          // Refresh job status to get updated state
+          checkJobStatus();
         } else {
           setSessionState('error');
           setStatusMessage(`Extraction failed: ${msg.error || 'Unknown error'}`);
@@ -176,12 +243,18 @@ export const useExtension = () => {
 
     chrome.runtime.onMessage.addListener(messageListener);
     return () => chrome.runtime.onMessage.removeListener(messageListener);
-  }, [sessionState, checkConnection]);
+  }, [sessionState, checkConnection, checkJobStatus]);
 
-  // Check connection on mount
+  // Check connection and job status on mount
   useEffect(() => {
-    checkConnection();
-  }, [checkConnection]);
+    const initialize = async () => {
+      const isConnected = await checkConnection();
+      if (isConnected) {
+        await checkJobStatus();
+      }
+    };
+    initialize();
+  }, [checkConnection, checkJobStatus]);
 
   return {
     connectionStatus,
@@ -191,11 +264,14 @@ export const useExtension = () => {
     statusMessage,
     extractedJob,
     autofillStats,
+    jobStatus,
+    isCheckingStatus,
     connect,
     disconnect,
     openDashboard,
     extractJob,
     generateAutofill,
-    debugExtractFields
+    debugExtractFields,
+    checkJobStatus
   };
 };

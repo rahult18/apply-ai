@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Header
-from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanRequest, AutofillPlanResponse, AutofillAgentInput, AutofillAgentOutput, AutofillEventRequest, AutofillFeedbackRequest, AutofillSubmitRequest
+from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanRequest, AutofillPlanResponse, AutofillAgentInput, AutofillAgentOutput, AutofillEventRequest, AutofillFeedbackRequest, AutofillSubmitRequest, JobStatusRequest, JobStatusResponse
 from app.services.supabase import Supabase
 from app.services.llm import LLM
 from app.services.autofill_agent_dag import DAG
@@ -12,7 +12,7 @@ import dotenv
 import os
 import json
 from jose import JWTError, jwt
-from app.utils import clean_content, extract_jd, normalize_url, infer_job_site_type, check_if_job_application_belongs_to_user, check_if_run_id_belongs_to_user
+from app.utils import clean_content, extract_jd, normalize_url, infer_job_site_type, check_if_job_application_belongs_to_user, check_if_run_id_belongs_to_user, extract_job_url_info
 import aiohttp
 import uuid
 
@@ -246,6 +246,92 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
     except Exception as e:
         logger.info(f"Unable to ingest job: {str(e)}")
         raise HTTPException(status_code=500, detail="Unable to ingest job")
+
+
+@router.post("/jobs/status")
+def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
+    """
+    Get the status of a job application based on URL.
+
+    Handles Lever (/apply suffix) and Ashby (/application suffix) URL patterns
+    by stripping the suffix to match against the base JD URL.
+    Greenhouse is treated as combined (single page with both JD and form).
+    """
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+        token = authorization.split("Bearer ")[1]
+        secret_key = os.getenv("SECRET_KEY")
+        algorithm = os.getenv("ALGORITHM")
+
+        # Decode and verify the JWT token
+        try:
+            payload = jwt.decode(token, secret_key, algorithms=[algorithm], audience='applyai-extension', issuer='applyai-api')
+            user_id = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Invalid token")
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        # Extract job board info and base URL
+        url_info = extract_job_url_info(body.url)
+        base_url = url_info["base_url"]
+        page_type = url_info["page_type"]
+
+        # Normalize the base URL for matching
+        normalized_base_url = normalize_url(base_url)
+
+        # Look up job application by normalized URL
+        with supabase.db_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, job_title, company, status FROM public.job_applications WHERE user_id = %s AND normalized_url = %s LIMIT 1",
+                (user_id, normalized_base_url)
+            )
+            job_record = cursor.fetchone()
+
+            if not job_record:
+                # Job not found
+                return JobStatusResponse(
+                    found=False,
+                    page_type=page_type
+                )
+
+            job_application_id = str(job_record[0])
+            job_title = job_record[1]
+            company = job_record[2]
+            job_status = job_record[3]
+
+            # Determine application state based on job_applications.status and autofill_runs
+            if job_status == "applied":
+                state = "applied"
+            else:
+                # Check if any completed autofill run exists
+                cursor.execute(
+                    "SELECT COUNT(*) FROM public.autofill_runs WHERE job_application_id = %s AND user_id = %s AND status = 'completed'",
+                    (job_application_id, user_id)
+                )
+                autofill_count = cursor.fetchone()[0]
+                if autofill_count > 0:
+                    state = "autofill_generated"
+                else:
+                    state = "jd_extracted"
+
+            return JobStatusResponse(
+                found=True,
+                page_type=page_type,
+                state=state,
+                job_application_id=job_application_id,
+                job_title=job_title,
+                company=company
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.info(f"Unable to get job status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unable to get job status")
+
 
 @router.post("/autofill/plan")
 def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(None)):

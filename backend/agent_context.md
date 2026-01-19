@@ -2,7 +2,7 @@
 
 This folder contains the FastAPI backend for the Application Tracker project. It provides RESTful API endpoints for authentication, job scraping, and integration with Supabase and Google Generative AI.
 
-**Total Application Code: ~2,400 lines**
+**Total Application Code: ~2,600 lines**
 
 ## Structure
 - `main.py` (64 lines): Entry point for the FastAPI server. Contains `build_log_config(log_file: str) -> dict` function for logging configuration. Configures logging to both console and timestamped file (in `logs/` directory as `backend_YYYYMMDD_HHMMSS.log`), then uses `uvicorn` to run the `app` from `app.api` on `0.0.0.0:8000` with hot reload enabled.
@@ -11,7 +11,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `app/`: Main application package.
   - `__init__.py`: Package initializer.
   - `api.py` (41 lines): Configures the FastAPI application, sets up CORS middleware (allows `http://localhost:3000`), and includes three routers (`/auth`, `/db`, `/extension`). Defines health check endpoint at `GET /` returning `{"status": "ok"}`.
-  - `models.py` (186 lines): Defines Pydantic models for request bodies and data structures:
+  - `models.py` (~200 lines): Defines Pydantic models for request bodies and data structures:
     - `JD`: Represents a job description with fields like `job_title`, `company`, `job_description`, `required_skills`, etc.
     - `RequestBody`: Used for authentication (e.g., `email`, `password`).
     - `UpdateProfileBody`: Used for updating user profile information.
@@ -19,13 +19,15 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `JobsIngestRequestBody`: Used for job ingestion with `job_link` and optional `dom_html`.
     - `EducationEntry`, `ExperienceEntry`, `ProjectEntry`, `CertificationEntry`: Structured models for resume components.
     - `ExtractedResumeModel`: Complete resume data model including skills, summary, experience, education, certifications, and projects.
-    - `ExtractedFormField`: Model for form fields extracted by the browser extension using JavaScript DOMParser. Contains `type`, `inputType`, `name`, `id`, `label`, `placeholder`, `required`, `value`, `selector`, `autocomplete`, `isCombobox`, `options`, and `maxLength`.
+    - `ExtractedFormField`: Model for form fields extracted by the browser extension using JavaScript DOMParser. Contains `type`, `inputType`, `name`, `id`, `label`, `placeholder`, `required`, `value` (Any type), `selector`, `autocomplete`, `isCombobox`, `options` (list[dict[str, Any]] to support boolean `checked` fields), and `maxLength`.
     - `AutofillPlanRequest`: Request model for autofill plan generation with `job_application_id`, `page_url`, `dom_html`, and **`extracted_fields`** (list of ExtractedFormField objects pre-extracted by extension).
     - `AutofillPlanResponse`: Response model containing `run_id`, `status`, `plan_json`, and `plan_summary`.
     - `AutofillEventRequest`, `AutofillFeedbackRequest`, `AutofillSubmitRequest`: Models for autofill telemetry and feedback.
     - `AutofillAgentInput`: Comprehensive input model for the autofill agent DAG, containing run metadata, application page details, job details, and user details (profile + resume).
     - `AutofillAgentOutput`: Output model from the autofill agent with status, plan_json, and plan_summary.
-  - `utils.py` (307 lines): Contains utility functions:
+    - `JobStatusRequest`: Request model for job status lookup with `url` field.
+    - `JobStatusResponse`: Response model containing `found`, `page_type` (jd|application|combined|unknown), `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`.
+  - `utils.py` (~380 lines): Contains utility functions:
     - `extract_jd`: Extracts structured job description data from raw HTML content using the LLM service.
     - `clean_content`: Cleans HTML content by removing script/style tags, JavaScript, and normalizing whitespace.
     - `normalize_url`: Normalizes URLs by removing tracking parameters, fragments, and normalizing casing and trailing slashes.
@@ -33,6 +35,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `parse_resume`: Parses a user's resume (PDF) using an LLM and updates the user's profile in the database with the extracted information.
     - `check_if_job_application_belongs_to_user`: Verifies that a job application ID belongs to a specific user.
     - `check_if_run_id_belongs_to_user`: Verifies that an autofill run ID belongs to a specific user.
+    - `extract_job_url_info`: Extracts job board type, base URL, and page type from a job URL. Handles Lever (`/apply` suffix), Ashby (`/application` suffix), and Greenhouse (combined single page). Returns dict with `job_board`, `base_url`, `page_type`.
   - `dag_utils.py` (296 lines): Contains DAG-related utilities for autofill agent:
     - **Enums**: `InputType` (text, textarea, select, radio, checkbox, date, number, email, password, file, tel, url, hidden, unknown), `AnswerAction` (autofill, suggest, skip), `RunStatus` (running, completed, failed).
     - **TypedDicts**: `FormField` (question_signature, label, input_type, required, options, selector), `FormFieldAnswer` (value, source, confidence 0.0-1.0, action), `PlanField`, `AutofillPlanJSON`, `AutofillPlanSummary`.
@@ -52,11 +55,12 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       - `GET /db/get-profile`: Retrieves the user's profile information from the `users` table, including a signed URL (1 hour expiry) for their resume if available in Supabase storage. Handles multiple signed URL response formats from Supabase SDK.
       - `GET /db/get-all-applications`: Fetches all job applications for the current user from the `job_applications` table ordered by created_at DESC. Converts tuples to dictionaries for JSON response.
       - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload to `user-documents` bucket (path: `resumes/{user_id}/{filename}`). Constructs dynamic UPDATE query with only provided fields. Triggers background task to parse resume using LLM. Sets resume_parse_status to "In progress" on update. Rollback: deletes uploaded file if DB update fails.
-    - `extension.py` (496 lines): Handles authentication, connection, and autofill functionality for the browser extension:
+    - `extension.py` (~580 lines): Handles authentication, connection, and autofill functionality for the browser extension:
       - `POST /extension/connect/start`: Generates a one-time code (32 char urlsafe) for the authenticated user to connect the browser extension. Stores SHA256 hash in `public.extension_connect_codes` with 10-minute expiration. Returns plaintext code.
       - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token (180 min expiry) with claims: sub (user_id), exp, iss (applyai-api), aud (applyai-extension), install_id. Marks code as used.
       - `GET /extension/me`: Retrieves user information (email, id, full_name) using the extension's JWT token. Decodes JWT with audience validation.
       - `POST /extension/jobs/ingest`: Ingests a job application. Normalizes URL to prevent duplicates, checks if job already exists (returns cached data if so). If new: fetches content from URL (if no DOM provided) or uses provided DOM, extracts JD using LLM, creates `public.job_applications` record. Returns job_application_id, url, job_title, company.
+      - `POST /extension/jobs/status`: Checks job application status by URL. Uses `extract_job_url_info()` to detect job board type (Lever, Ashby, Greenhouse) and page type (jd, application, combined). Strips `/apply` or `/application` suffixes for Lever/Ashby to match base JD URL. Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`. Enables smart button display in extension popup based on current page context.
       - `POST /extension/autofill/plan`: Generates an autofill plan for a job application form. Validates ownership of job_application_id. Checks for cached plan by dom_html hash + page_url (returns existing if found). If new: creates `public.autofill_runs` record with status='running', assembles AutofillAgentInput with JD and user data, invokes DAG agent. Returns run_id, status, plan_json, plan_summary.
       - `POST /extension/autofill/event`: Logs autofill events to `public.autofill_events` table for telemetry. Validates ownership of run_id. Returns {"status": "success"}.
       - `POST /extension/autofill/feedback`: Submits user feedback/corrections for autofill answers to `public.autofill_feedback` table. Validates ownership of run_id. Returns {"status": "success"}.
@@ -104,6 +108,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `POST /extension/connect/exchange`: Exchange one-time code for an extension JWT token.
 - `GET /extension/me`: Get current user info using extension token.
 - `POST /extension/jobs/ingest`: Ingest a job application from URL or DOM HTML.
+- `POST /extension/jobs/status`: Check job application status by URL. Supports Lever/Ashby URL pattern matching (strips `/apply` or `/application` suffixes). Returns page type, application state, and job details.
 - `POST /extension/autofill/plan`: Generate autofill plan for a job application form.
 - `POST /extension/autofill/event`: Log autofill telemetry events.
 - `POST /extension/autofill/feedback`: Submit feedback/corrections for autofill answers.
