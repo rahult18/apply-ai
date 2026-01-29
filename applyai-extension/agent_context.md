@@ -91,55 +91,72 @@ This folder contains the browser extension for the Application Tracker project. 
 - `popup/`: Extension popup UI (React + Vite + Tailwind)
   - `index.html` (13 lines): Entry point that loads the built popup.js from Vite
   - `src/main.jsx` (11 lines): React entry point that renders Popup component into #root
-  - `src/Popup.jsx` (~270 lines): Main popup component with:
-    - Header with logo (blue-purple gradient badge), "ApplyAI" title, subtitle "Autofill applications faster", and status pill
-    - Account info display with connection status (shows userName or userEmail when connected)
-    - Status messages for operation progress (conditional rendering based on sessionState)
-    - Job card display for extracted job info (job_title, company, "Saved to tracker" meta)
-    - Autofill stats display (green success box showing "Filled X fields, skipped Y")
-    - **Page type indicator**: Shows current page context (📄 Job Description Page, 📝 Application Form Page, 📄 Job Page (Single Page))
-    - **Dynamic action buttons** based on job status:
-      - No job found + JD page → "Extract JD" button
-      - No job found + application page → "Extract JD First" (disabled, with hint)
-      - Job found + jd_extracted → "Generate Autofill" button
-      - Job found + autofill_generated → "Autofill Again" button
-    - **Applied badge**: Shows green checkmark badge when job is marked as applied
-    - Secondary buttons: Dashboard, Debug, Disconnect
-    - Contextual hints for user guidance based on current state and page type
+  - `src/Popup.jsx` (~165 lines): Main popup component with stepper-driven architecture:
+    - Uses `useExtension` hook for state/actions and `useStepperState` hook for UI derivation
+    - Header card: Logo (sky gradient badge with BoltIcon), "ApplyAI" title, subtitle, StatusPill
+    - **ProgressStepper**: 4-step visual progress bar (Connect → Extract → Autofill → Applied)
+    - Main content card with conditional sections:
+      - StatusMessage for operation progress/errors
+      - JobCard for extracted job info
+      - Autofill stats (green success box: "Filled X fields, skipped Y")
+      - Applied badge (green checkmark pill)
+    - **Single dynamic primary action button** driven by `useStepperState`:
+      - Disconnected → "Connect to ApplyAI"
+      - No job + JD page → "Extract Job"
+      - No job + application page → "Extract Job First" (disabled, with hint)
+      - Job found → "Generate Autofill" / "Autofill Again"
+    - Secondary buttons (when connected): Dashboard, Debug (2-column grid), Disconnect
     - Layout: 380px width, 500px min-height, gray background
   - `src/style.css` (25 lines): Tailwind CSS styles (light theme with good contrast)
   - `src/components/`:
-    - `ActionButton.jsx` (52 lines): Reusable button component with variants (primary, secondary, danger, ghost)
-      - Primary: Blue background (#0284c7) with white text, shadow
-      - Secondary: White background with dark text and gray border
-      - Danger: Red background with white text and red border
-      - Ghost: Gray background with dark text
-      - Features: Loading state with spinner, disabled state styling, flex layout
-    - `StatusPill.jsx` (24 lines): Status indicator badge with color-coded states
-      - checking: Gray
+    - `ActionButton.jsx` (55 lines): Reusable button component with variants and sizes
+      - Variants: primary (sky-600), secondary (white/border), ghost (gray-100), danger (red-50/border)
+      - Sizes: lg (py-3.5, text-base, rounded-xl), md (py-2.5, text-sm, rounded-lg), sm (py-2, text-xs)
+      - Features: Loading state with SpinnerIcon, optional icon prop, disabled state, focus ring
+    - `StatusPill.jsx` (22 lines): Status indicator badge with color-coded states
       - connected: Green
       - disconnected: Amber/Yellow
       - error: Red
-      - working: Blue with pulse animation
+      - working: Sky blue with pulse animation
+      - Accepts custom `text` prop (no longer hardcoded labels)
+    - `Icons.jsx` (80 lines): SVG icon components used throughout the popup
+      - CheckIcon, LinkIcon, DocumentTextIcon, SparklesIcon, CheckBadgeIcon
+      - Squares2X2Icon (dashboard), BugAntIcon (debug), BoltIcon (logo), BriefcaseIcon (job card)
+      - ArrowRightOnRectangleIcon (disconnect), SpinnerIcon (loading animation)
+    - `ProgressStepper.jsx` (77 lines): Visual 4-step progress indicator
+      - Steps: Connect → Extract → Autofill → Applied
+      - Step states: completed (green circle + checkmark), active (sky circle + ring), pending (gray circle)
+      - Connector lines between steps (green when completed, gray otherwise)
+      - Icons mapped per step: LinkIcon, DocumentTextIcon, SparklesIcon, CheckBadgeIcon
     - `StatusMessage.jsx` (52 lines): Alert/notification component
       - Types: info, success, error, warning with color-coded backgrounds
       - Icons: Info circle, check circle, alert circle, warning triangle
       - Features: Slide-up animation
-    - `JobCard.jsx` (56 lines): Card displaying extracted job information
-      - Job icon (briefcase in blue badge)
-      - Job title (bold, truncated)
-      - Company name (gray text, truncated)
-      - "Saved to tracker" badge with checkmark
-      - Styling: White background, light border, shadow, slide-up animation
+    - `JobCard.jsx` (27 lines): Compact card displaying extracted job information
+      - BriefcaseIcon in sky gradient badge
+      - Job title (semibold, truncated) and company name (gray, truncated)
+      - Styling: White background, border, rounded-xl, shadow-sm
   - `src/hooks/`:
-    - `useExtension.js` (~275 lines): Custom hook managing extension state and messaging
+    - `useExtension.js` (~278 lines): Custom hook managing extension state and messaging
       - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats, **jobStatus**, **isCheckingStatus**
       - SessionState values: idle, extracting, extracted, autofilling, autofilled, **applied**, error
       - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields(), **checkJobStatus()**
+      - **generateAutofill()**: Sends `APPLYAI_AUTOFILL_PLAN` message with `job_application_id` from `jobStatus` state (not relying on background script's `lastIngest` storage)
       - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Auto-refreshes after JD extraction.
       - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT
       - Initialization: Checks connection on mount, then checks job status if connected
       - API URLs: APP_BASE_URL (localhost:3000), API_BASE_URL (localhost:8000)
+    - `useStepperState.js` (~140 lines): Custom hook deriving all UI state from extension state
+      - Input: connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage
+      - **Step computation**: Maps current state to 4-step progress (connect=0, extract=1, autofill=2, applied=3). Each step gets state: completed, active, or pending.
+      - **Pill status/text**: Derives StatusPill props (disconnected, working, error, connected) with dynamic text
+      - **Primary action**: Returns { label, handler, icon, loading, disabled, hint } based on:
+        - Not connected → "Connect to ApplyAI" (handler: connect)
+        - No job + non-application page → "Extract Job" (handler: extractJob)
+        - No job + application page → "Extract Job First" (disabled, with hint)
+        - Job found → "Generate Autofill" / "Autofill Again" (handler: generateAutofill)
+      - **Visibility flags**: showJobCard, showStatusMessage, messageType
+      - All values memoized via `useMemo` on input dependencies
 
 ## Purpose
 This folder provides the browser extension for the Application Tracker project. The extension enables users to:
@@ -313,24 +330,18 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - Body: background #f9fafb (light gray), color #111827 (dark gray)
   - Custom scrollbar: 8px width, gray track (#f3f4f6), rounded thumb (#d1d5db → #9ca3af on hover)
 
-## UI Improvements (v0.1.0+)
+## UI Architecture (v0.1.0+)
 
-- **High Contrast Design**: All text is clearly visible on light backgrounds
-  - Button text: Bold, larger font size (text-base), increased padding (py-3)
-  - Primary button: Blue background (#0284c7) with white text
-  - Secondary button: White background with dark text (#111827) and visible border
-  - Danger button: Red background with white text
-  - Ghost/Debug button: Gray background with dark text
-- **Status Indicators**: Color-coded status pills with high contrast
-  - Connected: Green background with dark green text
-  - Disconnected: Yellow background with dark yellow text
-  - Error: Red background with dark red text
-  - Working: Blue background with animation and dark blue text
-- **Status Messages**: High contrast colored alerts matching message type
-  - Info: Blue background with dark blue text
-  - Success: Green background with dark green text
-  - Error: Red background with dark red text
-  - Warning: Amber background with dark amber text
+- **Stepper-Driven Design**: All UI state derived from `useStepperState` hook
+  - Single source of truth: connectionStatus + sessionState + jobStatus → derived UI
+  - 4-step progress visualization: Connect → Extract → Autofill → Applied
+  - Dynamic primary action button changes label, icon, loading/disabled state contextually
+- **Component Library**: Reusable SVG icon components (`Icons.jsx`) replace inline SVGs and emojis
+- **Card-Based Layout**: Header card, stepper card, and content card with consistent rounded-xl styling
+- **Color System**: Sky-600 primary, green for success/completed, amber for warnings, red for errors
+- **Button Sizes**: lg (primary actions), md (secondary grid), sm (disconnect)
+- **Status Indicators**: StatusPill with dynamic text from stepper state
+- **Responsive Animations**: pulse-subtle for working state, transition-all on step circles/connectors
 
 ## Storage Schema
 - `installId`: Unique UUID for extension installation

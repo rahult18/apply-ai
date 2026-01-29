@@ -161,7 +161,7 @@ export const useExtension = () => {
     setStatusMessage('Generating autofill plan...');
     setAutofillStats(null);
 
-    chrome.runtime.sendMessage({ type: 'APPLYAI_AUTOFILL_PLAN' }, (resp) => {
+    chrome.runtime.sendMessage({ type: 'APPLYAI_AUTOFILL_PLAN', job_application_id: jobStatus?.job_application_id }, (resp) => {
       if (chrome.runtime.lastError) {
         setSessionState('extracted');
         setStatusMessage(`Error: ${chrome.runtime.lastError.message}`);
@@ -170,7 +170,7 @@ export const useExtension = () => {
         setStatusMessage(`Error: ${resp?.error || 'Unknown error'}`);
       }
     });
-  }, []);
+  }, [jobStatus]);
 
   // Debug extract fields
   const debugExtractFields = useCallback(() => {
