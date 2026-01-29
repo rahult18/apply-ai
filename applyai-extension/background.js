@@ -834,10 +834,10 @@ async function extractFormFieldsWithDropdownInteraction(tabId) {
     return result || [];
 }
 
-async function applyAutofillPlanToTab(tabId, planJson) {
+async function applyAutofillPlanToTab(tabId, planJson, resumeUrl) {
     const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
-        func: (plan) => {
+        func: async (plan, resumeFileUrl) => {
             console.log("ApplyAI: applying autofill plan in page context", {
                 totalFields: Array.isArray(plan?.fields) ? plan.fields.length : 0
             });
@@ -1053,6 +1053,27 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                 return { applied: false, matchMethod: "no_match" };
             };
 
+            const fillFileInput = async (el, fileUrl) => {
+                if (!fileUrl) return false;
+                try {
+                    const resp = await fetch(fileUrl);
+                    if (!resp.ok) return false;
+                    const blob = await resp.blob();
+                    const fileName = fileUrl.split("/").pop().split("?")[0] || "resume.pdf";
+                    const file = new File([blob], fileName, { type: blob.type || "application/pdf" });
+                    const dt = new DataTransfer();
+                    dt.items.add(file);
+                    el.files = dt.files;
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                    console.log("ApplyAI: fillFileInput success", { fileName, size: blob.size });
+                    return true;
+                } catch (err) {
+                    console.error("ApplyAI: fillFileInput error", err);
+                    return false;
+                }
+            };
+
             const fillTextInput = (el, value) => {
                 if (value == null) return false;
                 const tag = (el.tagName || "").toLowerCase();
@@ -1197,7 +1218,13 @@ async function applyAutofillPlanToTab(tabId, planJson) {
                     let applied = false;
 
                     let matchMethod = null;
-                    if (inputType === "select") {
+                    if (inputType === "file") {
+                        if (value === "resume" && resumeFileUrl) {
+                            applied = await fillFileInput(nodes[0], resumeFileUrl);
+                        } else {
+                            applied = false;
+                        }
+                    } else if (inputType === "select") {
                         const result = selectOption(nodes[0], value);
                         applied = result.applied;
                         matchMethod = result.matchMethod;
@@ -1245,7 +1272,7 @@ async function applyAutofillPlanToTab(tabId, planJson) {
 
             return { filled, skipped, errors, debug };
         },
-        args: [planJson]
+        args: [planJson, resumeUrl]
     });
 
     return result || { filled: 0, skipped: 0, errors: [], debug: [] };
@@ -1585,7 +1612,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                 progress("autofilling");
 
-                const applyResult = await applyAutofillPlanToTab(tab.id, planJson);
+                const applyResult = await applyAutofillPlanToTab(tab.id, planJson, planData?.resume_url);
                 console.log("ApplyAI autofill result:", applyResult);
                 if (applyResult?.debug) {
                     console.log("ApplyAI autofill debug:", applyResult.debug);

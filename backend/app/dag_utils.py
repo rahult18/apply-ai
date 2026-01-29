@@ -279,11 +279,11 @@ def _normalize_answer(answer: Optional[FormFieldAnswer]) -> FormFieldAnswer:
             "value": None,
             "source": "unknown",
             "confidence": 0.0,
-            "action": "skip",
+            "action": "autofill",
         }
     action = answer.get("action")
     if action not in {"autofill", "suggest", "skip"}:
-        action = "skip"
+        action = "autofill"
     if action == "suggest":
         action = "autofill"
     conf = float(answer.get("confidence") or 0.0)

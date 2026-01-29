@@ -183,9 +183,10 @@ class DAG():
                     "Return JSON only, matching the provided JSON schema.",
                     "Use user_ctx for identity/contact/demographics when applicable.",
                     "For select/radio/checkbox: when options are provided, return one exact option string from the list (no new values).",
-                    "If options are provided and none apply, set action='suggest' and value=null.",
-                    "If you are not confident, set action='suggest' or 'skip' with low confidence.",
-                    "Do not invent personally sensitive info. If missing, use action='suggest' and value=null.",
+                    "For select/radio fields where no option is a perfect match, pick the closest matching option and set action='autofill' with lower confidence.",
+                    "ALWAYS set action='autofill' for every field. Only use action='skip' for file upload input fields.",
+                    "For text/textarea fields, always provide your best answer even if confidence is low. Use data from user_ctx, resume_ctx, or job_ctx.",
+                    "Do not invent personally sensitive info (e.g. SSN, bank details). For missing demographic/identity info, set action='autofill' with value='' and low confidence.",
                 ],
                 "context": {
                     "page_url": input_data.get("page_url"),
@@ -269,6 +270,27 @@ class DAG():
             # Normalize to your FormFieldAnswer schema
             for f in form_fields:
                 sig = f.get("question_signature")
+                input_type = f.get("input_type")
+
+                # File inputs: auto-assign resume upload, bypass LLM
+                if input_type == "file":
+                    label_lower = (f.get("label") or "").lower()
+                    if any(kw in label_lower for kw in ("cover letter", "cover_letter", "coverletter")):
+                        answers_out[sig] = {
+                            "value": "cover_letter",
+                            "source": "profile",
+                            "confidence": 0.0,
+                            "action": "skip",
+                        }
+                    else:
+                        answers_out[sig] = {
+                            "value": "resume",
+                            "source": "profile",
+                            "confidence": 1.0,
+                            "action": "autofill",
+                        }
+                    continue
+
                 item = validated.answers.get(sig)
 
                 if not item:
@@ -276,7 +298,7 @@ class DAG():
                         "value": None,
                         "source": "unknown",
                         "confidence": 0.0,
-                        "action": "skip",
+                        "action": "autofill",
                     }
                     continue
 

@@ -35,11 +35,12 @@ This folder contains the browser extension for the Application Tracker project. 
     - Displays summary table with all extracted fields
     - Warns about any dropdowns that failed to extract options
     - Outputs full field data as JSON for analysis
-  - **Autofill application**: `applyAutofillPlanToTab(tabId, planJson)` applies autofill plans with sophisticated form filling:
-    - Supports text inputs, native selects, React Select components, radio groups, and checkbox groups
+  - **Autofill application**: `applyAutofillPlanToTab(tabId, planJson, resumeUrl)` applies autofill plans with sophisticated form filling:
+    - Supports text inputs, native selects, React Select components, radio groups, checkbox groups, and **file uploads**
     - React Select detection via `role="combobox"` or `aria-autocomplete="list"`
     - Advanced option matching with text normalization and synonym support (e.g., "US" → "United States")
     - Triggers proper React events (input, change, keydown) for framework compatibility
+    - **File upload support**: `fillFileInput(el, fileUrl)` fetches resume from signed URL, creates `File` object via `DataTransfer` API, and attaches to file input elements
     - Returns detailed debug information with filled/skipped counts
   - **URL security**: `isRestrictedUrl(url)` prevents access to chrome://, edge://, about:, and file:// URLs
 
@@ -76,8 +77,9 @@ This folder contains the browser extension for the Application Tracker project. 
      - POSTs to `/extension/autofill/plan` with `job_application_id`, `page_url`, `dom_html`, and `extracted_fields`
      - Backend receives pre-extracted fields with dropdown options already populated (no server-side parsing needed)
      - Backend enriches country fields automatically (adds 196 countries to select fields with "country", "nationality", or "citizenship" keywords)
-     - Receives `plan_json` with fields array (each field has: action, selector, input_type, value, question_signature, options)
-     - Applies plan to page using `applyAutofillPlanToTab()`
+     - Receives `plan_json` with fields array (each field has: action, selector, input_type, value, question_signature, options) and `resume_url` (signed URL for file uploads)
+     - Applies plan to page using `applyAutofillPlanToTab()`, passing `resume_url` for file input fields
+     - File input fields with `value: "resume"` trigger resume download and attachment via DataTransfer API
      - Sends progress messages: `APPLYAI_AUTOFILL_PROGRESS` (stages: starting, extracting_dom, extracting_fields, planning, autofilling)
      - Sends result: `APPLYAI_AUTOFILL_RESULT` (includes ok, run_id, plan_summary, filled, skipped, errors)
 
@@ -208,7 +210,8 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 7. Backend generates autofill plan (field selectors, values, actions, confidence scores)
 8. Plan applied to page via `applyAutofillPlanToTab()`:
    - Identifies form fields by CSS selectors
-   - Handles various input types (text, select, radio, checkbox, React Select)
+   - Handles various input types (text, select, radio, checkbox, React Select, **file upload**)
+   - For file inputs with `value: "resume"`, fetches resume PDF from signed URL and attaches via DataTransfer API
    - Fills values and triggers appropriate events
 9. Popup displays filled field count
 
@@ -248,6 +251,8 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - React Select component detection and interaction
   - Text normalization and synonym matching for robust option selection
   - Support for multiple input types with appropriate handling
+  - **Resume file upload**: Fetches resume PDF from backend-provided signed URL, creates File object via DataTransfer API, attaches to `<input type="file">` elements
+  - **Aggressive autofill**: LLM instructed to always use `action='autofill'` (skip only for unsupported file types like cover letters). Missing LLM responses default to `autofill` instead of `skip`.
 - **Progress Tracking**: Real-time progress messages for all async operations
 - **Session State Management**: Tracks user flow through idle → extracting → extracted → autofilling → autofilled → applied states
 - **Job Status Awareness**: On popup open, calls `/extension/jobs/status` to check current page context:
@@ -276,7 +281,8 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - **Extension now provides dropdown options**: React Select options are pre-extracted by opening dropdowns programmatically
   - Backend converts JS field format to internal FormField format
   - Backend enriches country fields automatically (fallback if options missing)
-  - Returns autofill plan with field values, actions, and confidence scores
+  - **Plan caching**: Returns cached completed plan if one exists for same `job_application_id + page_url` (ignores DOM hash changes)
+  - Returns autofill plan with field values, actions, confidence scores, and `resume_url` (signed URL for file uploads)
 
 ## Frontend Integration
 - `/extension/connect`: Connection page that generates one-time codes

@@ -113,6 +113,7 @@ class AutofillPlanResponse(BaseModel):
     status: str
     plan_json: Optional[dict] = None
     plan_summary: Optional[dict] = None
+    resume_url: Optional[str] = None
 
 class AutofillEventRequest(BaseModel):
     run_id: str

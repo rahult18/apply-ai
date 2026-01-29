@@ -361,9 +361,32 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
         normalized_job_url = normalize_url(body.page_url)
         dom_html_hashed = hashlib.sha256(body.dom_html.encode('utf-8')).hexdigest()
 
-        # check if an autofill plan exists for the given job_application_id and dom_html hash
+        # Generate signed URL for user's resume (for file upload fields)
+        resume_signed_url = None
+        try:
+            with supabase.db_connection.cursor() as cursor:
+                cursor.execute("SELECT resume FROM public.users WHERE id=%s", (user_id,))
+                resume_row = cursor.fetchone()
+                if resume_row and resume_row[0]:
+                    storage = supabase.client.storage.from_("user-documents")
+                    signed_urls_response = storage.create_signed_urls(
+                        paths=[resume_row[0]],
+                        expires_in=3600
+                    )
+                    if isinstance(signed_urls_response, list) and len(signed_urls_response) > 0:
+                        first_result = signed_urls_response[0]
+                        if isinstance(first_result, dict):
+                            resume_signed_url = first_result.get('signedURL') or first_result.get('signed_url')
+                        elif hasattr(first_result, 'signedURL'):
+                            resume_signed_url = first_result.signedURL
+                        elif hasattr(first_result, 'signed_url'):
+                            resume_signed_url = first_result.signed_url
+        except Exception as e:
+            logger.warning(f"Could not generate resume signed URL: {e}")
+
+        # check if an autofill plan already exists for this job application + page
         with supabase.db_connection.cursor() as cursor:
-            cursor.execute("SELECT id, status, plan_json, plan_summary FROM public.autofill_runs WHERE job_application_id=%s AND user_id=%s AND dom_html_hash=%s AND page_url=%s AND plan_json IS NOT NULL ORDER BY created_at DESC LIMIT 1", (body.job_application_id, user_id, dom_html_hashed, normalized_job_url))
+            cursor.execute("SELECT id, status, plan_json, plan_summary FROM public.autofill_runs WHERE job_application_id=%s AND user_id=%s AND page_url=%s AND plan_json IS NOT NULL AND status='completed' ORDER BY created_at DESC LIMIT 1", (body.job_application_id, user_id, normalized_job_url))
             result = cursor.fetchone()
             if result:
                 autofill_run_id = result[0]
@@ -375,7 +398,8 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
                     run_id=autofill_run_id,
                     status=status,
                     plan_json=plan_json,
-                    plan_summary=plan_summary
+                    plan_summary=plan_summary,
+                    resume_url=resume_signed_url
                 )
                 logger.info("Autofill plan response: %s", json.dumps(response.model_dump(), ensure_ascii=False))
                 return response
@@ -462,7 +486,8 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
             run_id=autofill_agent_input.run_id,
             status=autofill_agent_output.status,
             plan_json=autofill_agent_output.plan_json,
-            plan_summary=autofill_agent_output.plan_summary
+            plan_summary=autofill_agent_output.plan_summary,
+            resume_url=resume_signed_url
         )
         logger.info("Autofill plan response: %s", json.dumps(response.model_dump(), ensure_ascii=False))
         return response
