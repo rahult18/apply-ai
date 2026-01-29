@@ -2,7 +2,7 @@
 
 This folder contains the FastAPI backend for the Application Tracker project. It provides RESTful API endpoints for authentication, job scraping, and integration with Supabase and Google Generative AI.
 
-**Total Application Code: ~2,600 lines**
+**Total Application Code: ~2,900 lines**
 
 ## Structure
 - `main.py` (64 lines): Entry point for the FastAPI server. Contains `build_log_config(log_file: str) -> dict` function for logging configuration. Configures logging to both console and timestamped file (in `logs/` directory as `backend_YYYYMMDD_HHMMSS.log`), then uses `uvicorn` to run the `app` from `app.api` on `0.0.0.0:8000` with hot reload enabled.

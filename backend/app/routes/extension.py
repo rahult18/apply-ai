@@ -317,6 +317,8 @@ def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
                 else:
                     state = "jd_extracted"
 
+            logger.info(f"Job status found for job_application_id={job_application_id}, state={state}, page_type={page_type}, job_title={job_title}, company={company}")
+
             return JobStatusResponse(
                 found=True,
                 page_type=page_type,
