@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import {
   User,
   Link as LinkIcon,
@@ -32,6 +33,9 @@ import {
   Eye,
   Download,
   ExternalLink,
+  Plus,
+  Trash2,
+  X,
 } from "lucide-react"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
@@ -69,6 +73,7 @@ interface UserProfile {
     experience?: {
       company: string
       position: string
+      location?: string
       start_date?: string
       end_date?: string
       description?: string
@@ -95,6 +100,7 @@ interface UserProfile {
       link?: string
     }[]
   }
+  open_to_relocation?: boolean
   resume_parsed_at?: string
   resume_parse_status?: "PENDING" | "COMPLETED" | "FAILED"
 }
@@ -136,6 +142,7 @@ export default function ProfilePage() {
   const [desiredLocationInput, setDesiredLocationInput] = useState("")
   const [isParsingResume, setIsParsingResume] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
+  const [skillInput, setSkillInput] = useState("")
 
   useEffect(() => {
     if (user) {
@@ -245,6 +252,12 @@ export default function ProfilePage() {
       if (profile.race) formData.append("race", profile.race)
       if (profile.veteran_status) formData.append("veteran_status", profile.veteran_status)
       if (profile.disability_status) formData.append("disability_status", profile.disability_status)
+      if (profile.open_to_relocation !== undefined) {
+        formData.append("open_to_relocation", String(profile.open_to_relocation))
+      }
+      if (profile.resume_profile) {
+        formData.append("resume_profile", JSON.stringify(profile.resume_profile))
+      }
       if (resumeFile) formData.append("resume", resumeFile)
 
       const response = await fetch(`${API_URL}/db/update-profile`, {
@@ -513,6 +526,17 @@ export default function ProfilePage() {
                     />
                   </div>
                 </div>
+                <Separator />
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="open_to_relocation"
+                    checked={profile.open_to_relocation || false}
+                    onCheckedChange={(checked) =>
+                      setProfile({ ...profile, open_to_relocation: checked as boolean })
+                    }
+                  />
+                  <Label htmlFor="open_to_relocation">Open to relocation</Label>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -708,112 +732,335 @@ export default function ProfilePage() {
               </CardContent>
             </Card>
 
-            {profile.resume_profile && !isParsingResume && (
+            {!isParsingResume && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Parsed Resume Data</CardTitle>
+                  <CardTitle>Resume Data</CardTitle>
                   <CardDescription>
-                    Information extracted from your resume
+                    {profile.resume_profile
+                      ? "Edit your resume information below"
+                      : "Add your resume information manually or upload a resume above"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {profile.resume_profile.summary && (
-                    <div className="space-y-2">
-                      <Label>Summary</Label>
-                      <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-                        {profile.resume_profile.summary}
-                      </p>
+                  {/* Summary */}
+                  <div className="space-y-2">
+                    <Label>Summary</Label>
+                    <Textarea
+                      placeholder="Brief professional summary..."
+                      value={profile.resume_profile?.summary || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          resume_profile: {
+                            ...profile.resume_profile,
+                            summary: e.target.value,
+                          },
+                        })
+                      }
+                      rows={4}
+                    />
+                  </div>
+
+                  {/* Skills */}
+                  <div className="space-y-2">
+                    <Label>Skills</Label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {(profile.resume_profile?.skills || []).map((skill, index) => (
+                        <Badge key={index} variant="secondary" className="gap-1 pr-1">
+                          {skill}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const skills = [...(profile.resume_profile?.skills || [])]
+                              skills.splice(index, 1)
+                              setProfile({
+                                ...profile,
+                                resume_profile: { ...profile.resume_profile, skills },
+                              })
+                            }}
+                            className="ml-1 rounded-full hover:bg-muted p-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
                     </div>
-                  )}
-
-                  {profile.resume_profile.skills && profile.resume_profile.skills.length > 0 && (
-                    <div className="space-y-2">
-                      <Label>Skills</Label>
-                      <div className="flex flex-wrap gap-2">
-                        {profile.resume_profile.skills.map((skill, index) => (
-                          <Badge key={index} variant="secondary">
-                            {skill}
-                          </Badge>
-                        ))}
-                      </div>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Add a skill..."
+                        value={skillInput}
+                        onChange={(e) => setSkillInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && skillInput.trim()) {
+                            e.preventDefault()
+                            const skills = [...(profile.resume_profile?.skills || []), skillInput.trim()]
+                            setProfile({
+                              ...profile,
+                              resume_profile: { ...profile.resume_profile, skills },
+                            })
+                            setSkillInput("")
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (skillInput.trim()) {
+                            const skills = [...(profile.resume_profile?.skills || []), skillInput.trim()]
+                            setProfile({
+                              ...profile,
+                              resume_profile: { ...profile.resume_profile, skills },
+                            })
+                            setSkillInput("")
+                          }
+                        }}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
                     </div>
-                  )}
+                  </div>
 
-                  {profile.resume_profile.experience &&
-                    profile.resume_profile.experience.length > 0 && (
-                      <div className="space-y-3">
-                        <Label>Experience</Label>
-                        <div className="space-y-3">
-                          {profile.resume_profile.experience.map((exp, index) => (
-                            <div key={index} className="p-4 rounded-lg border">
-                              <p className="font-medium">
-                                {exp.position} at {exp.company}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {exp.start_date} - {exp.end_date || "Present"}
-                              </p>
-                              {exp.description && (
-                                <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
-                                  {exp.description}
-                                </p>
-                              )}
+                  <Separator />
+
+                  {/* Experience */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label>Experience</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const experience = [
+                            ...(profile.resume_profile?.experience || []),
+                            { company: "", position: "", location: "", start_date: "", end_date: "", description: "" },
+                          ]
+                          setProfile({
+                            ...profile,
+                            resume_profile: { ...profile.resume_profile, experience },
+                          })
+                        }}
+                      >
+                        <Plus className="mr-1 h-4 w-4" />
+                        Add
+                      </Button>
+                    </div>
+                    {(profile.resume_profile?.experience || []).map((exp, index) => (
+                      <div key={index} className="p-4 rounded-lg border space-y-3">
+                        <div className="flex justify-between items-start">
+                          <span className="text-sm font-medium text-muted-foreground">#{index + 1}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              const experience = [...(profile.resume_profile?.experience || [])]
+                              experience.splice(index, 1)
+                              setProfile({
+                                ...profile,
+                                resume_profile: { ...profile.resume_profile, experience },
+                              })
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Role / Position</Label>
+                            <Input
+                              value={exp.position}
+                              onChange={(e) => {
+                                const experience = [...(profile.resume_profile?.experience || [])]
+                                experience[index] = { ...experience[index], position: e.target.value }
+                                setProfile({ ...profile, resume_profile: { ...profile.resume_profile, experience } })
+                              }}
+                              placeholder="Software Engineer"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Company</Label>
+                            <Input
+                              value={exp.company}
+                              onChange={(e) => {
+                                const experience = [...(profile.resume_profile?.experience || [])]
+                                experience[index] = { ...experience[index], company: e.target.value }
+                                setProfile({ ...profile, resume_profile: { ...profile.resume_profile, experience } })
+                              }}
+                              placeholder="Acme Inc."
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Location</Label>
+                            <Input
+                              value={exp.location || ""}
+                              onChange={(e) => {
+                                const experience = [...(profile.resume_profile?.experience || [])]
+                                experience[index] = { ...experience[index], location: e.target.value }
+                                setProfile({ ...profile, resume_profile: { ...profile.resume_profile, experience } })
+                              }}
+                              placeholder="San Francisco, CA"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs">Start Date</Label>
+                              <Input
+                                value={exp.start_date || ""}
+                                onChange={(e) => {
+                                  const experience = [...(profile.resume_profile?.experience || [])]
+                                  experience[index] = { ...experience[index], start_date: e.target.value }
+                                  setProfile({ ...profile, resume_profile: { ...profile.resume_profile, experience } })
+                                }}
+                                placeholder="YYYY-MM-DD"
+                              />
                             </div>
-                          ))}
+                            <div className="space-y-1">
+                              <Label className="text-xs">End Date</Label>
+                              <Input
+                                value={exp.end_date || ""}
+                                onChange={(e) => {
+                                  const experience = [...(profile.resume_profile?.experience || [])]
+                                  experience[index] = { ...experience[index], end_date: e.target.value }
+                                  setProfile({ ...profile, resume_profile: { ...profile.resume_profile, experience } })
+                                }}
+                                placeholder="YYYY-MM-DD or empty"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Description</Label>
+                          <Textarea
+                            value={exp.description || ""}
+                            onChange={(e) => {
+                              const experience = [...(profile.resume_profile?.experience || [])]
+                              experience[index] = { ...experience[index], description: e.target.value }
+                              setProfile({ ...profile, resume_profile: { ...profile.resume_profile, experience } })
+                            }}
+                            placeholder="Responsibilities and achievements..."
+                            rows={3}
+                          />
                         </div>
                       </div>
-                    )}
+                    ))}
+                  </div>
 
-                  {profile.resume_profile.education &&
-                    profile.resume_profile.education.length > 0 && (
-                      <div className="space-y-3">
-                        <Label>Education</Label>
-                        <div className="space-y-3">
-                          {profile.resume_profile.education.map((edu, index) => (
-                            <div key={index} className="p-4 rounded-lg border">
-                              <p className="font-medium">
-                                {edu.degree} in {edu.field_of_study}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {edu.institution}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {edu.start_date} - {edu.end_date || "Present"}
-                              </p>
+                  <Separator />
+
+                  {/* Education */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label>Education</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const education = [
+                            ...(profile.resume_profile?.education || []),
+                            { institution: "", degree: "", field_of_study: "", start_date: "", end_date: "" },
+                          ]
+                          setProfile({
+                            ...profile,
+                            resume_profile: { ...profile.resume_profile, education },
+                          })
+                        }}
+                      >
+                        <Plus className="mr-1 h-4 w-4" />
+                        Add
+                      </Button>
+                    </div>
+                    {(profile.resume_profile?.education || []).map((edu, index) => (
+                      <div key={index} className="p-4 rounded-lg border space-y-3">
+                        <div className="flex justify-between items-start">
+                          <span className="text-sm font-medium text-muted-foreground">#{index + 1}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              const education = [...(profile.resume_profile?.education || [])]
+                              education.splice(index, 1)
+                              setProfile({
+                                ...profile,
+                                resume_profile: { ...profile.resume_profile, education },
+                              })
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Degree</Label>
+                            <Input
+                              value={edu.degree}
+                              onChange={(e) => {
+                                const education = [...(profile.resume_profile?.education || [])]
+                                education[index] = { ...education[index], degree: e.target.value }
+                                setProfile({ ...profile, resume_profile: { ...profile.resume_profile, education } })
+                              }}
+                              placeholder="Bachelor of Science"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Field of Study</Label>
+                            <Input
+                              value={edu.field_of_study}
+                              onChange={(e) => {
+                                const education = [...(profile.resume_profile?.education || [])]
+                                education[index] = { ...education[index], field_of_study: e.target.value }
+                                setProfile({ ...profile, resume_profile: { ...profile.resume_profile, education } })
+                              }}
+                              placeholder="Computer Science"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Institution</Label>
+                            <Input
+                              value={edu.institution}
+                              onChange={(e) => {
+                                const education = [...(profile.resume_profile?.education || [])]
+                                education[index] = { ...education[index], institution: e.target.value }
+                                setProfile({ ...profile, resume_profile: { ...profile.resume_profile, education } })
+                              }}
+                              placeholder="University of..."
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs">Start Date</Label>
+                              <Input
+                                value={edu.start_date || ""}
+                                onChange={(e) => {
+                                  const education = [...(profile.resume_profile?.education || [])]
+                                  education[index] = { ...education[index], start_date: e.target.value }
+                                  setProfile({ ...profile, resume_profile: { ...profile.resume_profile, education } })
+                                }}
+                                placeholder="YYYY-MM-DD"
+                              />
                             </div>
-                          ))}
+                            <div className="space-y-1">
+                              <Label className="text-xs">End Date</Label>
+                              <Input
+                                value={edu.end_date || ""}
+                                onChange={(e) => {
+                                  const education = [...(profile.resume_profile?.education || [])]
+                                  education[index] = { ...education[index], end_date: e.target.value }
+                                  setProfile({ ...profile, resume_profile: { ...profile.resume_profile, education } })
+                                }}
+                                placeholder="YYYY-MM-DD or empty"
+                              />
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    )}
-
-                  {profile.resume_profile.projects &&
-                    profile.resume_profile.projects.length > 0 && (
-                      <div className="space-y-3">
-                        <Label>Projects</Label>
-                        <div className="space-y-3">
-                          {profile.resume_profile.projects.map((proj, index) => (
-                            <div key={index} className="p-4 rounded-lg border">
-                              <p className="font-medium">{proj.name}</p>
-                              {proj.description && (
-                                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">
-                                  {proj.description}
-                                </p>
-                              )}
-                              {proj.link && (
-                                <a
-                                  href={proj.link}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sm text-primary hover:underline mt-2 inline-flex items-center gap-1"
-                                >
-                                  <ExternalLink className="h-3 w-3" />
-                                  View Project
-                                </a>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
             )}

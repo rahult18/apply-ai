@@ -17,7 +17,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `UpdateProfileBody`: Used for updating user profile information.
     - `ExchangeRequestBody`: Used for the extension's one-time code exchange (e.g., `one_time_code`, `install_id`).
     - `JobsIngestRequestBody`: Used for job ingestion with `job_link` and optional `dom_html`.
-    - `EducationEntry`, `ExperienceEntry`, `ProjectEntry`, `CertificationEntry`: Structured models for resume components.
+    - `EducationEntry`, `ExperienceEntry` (includes `location` field), `ProjectEntry`, `CertificationEntry`: Structured models for resume components.
     - `ExtractedResumeModel`: Complete resume data model including skills, summary, experience, education, certifications, and projects.
     - `ExtractedFormField`: Model for form fields extracted by the browser extension using JavaScript DOMParser. Contains `type`, `inputType`, `name`, `id`, `label`, `placeholder`, `required`, `value` (Any type), `selector`, `autocomplete`, `isCombobox`, `options` (list[dict[str, Any]] to support boolean `checked` fields), and `maxLength`.
     - `AutofillPlanRequest`: Request model for autofill plan generation with `job_application_id`, `page_url`, `dom_html`, and **`extracted_fields`** (list of ExtractedFormField objects pre-extracted by extension).
@@ -32,7 +32,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `clean_content`: Cleans HTML content by removing script/style tags, JavaScript, and normalizing whitespace.
     - `normalize_url`: Normalizes URLs by removing tracking parameters, fragments, and normalizing casing and trailing slashes.
     - `infer_job_site_type`: Infers the job board type (linkedin, y-combinator, job-board, careers page) from a URL.
-    - `parse_resume`: Parses a user's resume (PDF) using an LLM and updates the user's profile in the database with the extracted information.
+    - `parse_resume`: Parses a user's resume (PDF) using an LLM and updates the user's profile in the database with the extracted information. Extracts location for each experience entry.
     - `check_if_job_application_belongs_to_user`: Verifies that a job application ID belongs to a specific user.
     - `check_if_run_id_belongs_to_user`: Verifies that an autofill run ID belongs to a specific user.
     - `extract_job_url_info`: Extracts job board type, base URL, and page type from a job URL. Handles Lever (`/apply` suffix), Ashby (`/application` suffix), and Greenhouse (combined single page). Returns dict with `job_board`, `base_url`, `page_type`.
@@ -54,7 +54,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `db.py` (311 lines): Handles database interactions related to user profiles and job applications:
       - `GET /db/get-profile`: Retrieves the user's profile information from the `users` table, including a signed URL (1 hour expiry) for their resume if available in Supabase storage. Handles multiple signed URL response formats from Supabase SDK.
       - `GET /db/get-all-applications`: Fetches all job applications for the current user from the `job_applications` table ordered by created_at DESC. Converts tuples to dictionaries for JSON response.
-      - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload to `user-documents` bucket (path: `resumes/{user_id}/{filename}`). Constructs dynamic UPDATE query with only provided fields. Triggers background task to parse resume using LLM. Sets resume_parse_status to "In progress" on update. Rollback: deletes uploaded file if DB update fails.
+      - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload to `user-documents` bucket (path: `resumes/{user_id}/{filename}`). Constructs dynamic UPDATE query with only provided fields. Supports `open_to_relocation` (boolean) and `resume_profile` (JSON string) fields for editable resume data. Triggers background task to parse resume using LLM. Sets resume_parse_status to "In progress" on update. Rollback: deletes uploaded file if DB update fails.
     - `extension.py` (~580 lines): Handles authentication, connection, and autofill functionality for the browser extension:
       - `POST /extension/connect/start`: Generates a one-time code (32 char urlsafe) for the authenticated user to connect the browser extension. Stores SHA256 hash in `public.extension_connect_codes` with 10-minute expiration. Returns plaintext code.
       - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token (180 min expiry) with claims: sub (user_id), exp, iss (applyai-api), aud (applyai-extension), install_id. Marks code as used.
@@ -134,12 +134,28 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 
 Tables referenced in code:
 - `auth.users` - Supabase authentication (managed by Supabase)
-- `public.users` - User profiles and resume data (first_name, full_name, resume_url, resume_parse_status, etc.)
+- `public.users` - User profiles and resume data (first_name, full_name, resume_url, resume_parse_status, open_to_relocation, resume_profile JSONB, etc.)
 - `public.job_applications` - Job postings with normalized_url and jd_dom_html
 - `public.extension_connect_codes` - One-time codes for extension pairing (code_hash, expires_at, used)
 - `public.autofill_runs` - Autofill execution history (dom_html_hash, plan_json, plan_summary, status)
 - `public.autofill_events` - Event logs for autofill runs (run_id, event_type, payload)
 - `public.autofill_feedback` - User corrections to autofill answers (run_id, question_signature, correction)
+- `public.site_configs` - Site configuration data (read-only for authenticated users)
+- `public.site_domain_map` - Site domain mapping (read-only for authenticated users)
+
+### Row Level Security (RLS)
+
+All public tables have RLS enabled with policies scoped to authenticated users:
+- **users**: SELECT + UPDATE own profile (`auth.uid() = id`)
+- **job_applications**: SELECT + INSERT + UPDATE own applications (`auth.uid() = user_id`)
+- **extension_connect_codes**: SELECT + INSERT own codes (`auth.uid() = user_id`)
+- **autofill_runs**: SELECT + INSERT + UPDATE own runs (`auth.uid() = user_id`)
+- **autofill_events**: SELECT + INSERT own events (`auth.uid() = user_id`)
+- **autofill_feedback**: SELECT + INSERT own feedback (`auth.uid() = user_id`)
+- **site_configs**: SELECT for all authenticated users (`USING (true)`)
+- **site_domain_map**: SELECT for all authenticated users (`USING (true)`)
+
+> **Note**: RLS applies to Supabase Data API (anon/authenticated roles). Direct `psycopg2` connections (used by the backend) bypass RLS as they connect as the `postgres` superuser.
 
 ## Dependencies (requirements.txt)
 

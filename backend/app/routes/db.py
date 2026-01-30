@@ -136,6 +136,8 @@ async def update_profile(
     race: Optional[str] = Form(None),
     veteran_status: Optional[str] = Form(None),
     disability_status: Optional[str] = Form(None),
+    open_to_relocation: Optional[bool] = Form(None),
+    resume_profile: Optional[str] = Form(None),  # JSON string from frontend
     background_tasks: BackgroundTasks = None
 ):
     try:
@@ -278,6 +280,16 @@ async def update_profile(
         if disability_status is not None:
             update_fields.append("disability_status = %s")
             update_values.append(disability_status)
+        if open_to_relocation is not None:
+            update_fields.append("open_to_relocation = %s")
+            update_values.append(open_to_relocation)
+        if resume_profile is not None:
+            try:
+                resume_profile_data = json.loads(resume_profile)
+                update_fields.append("resume_profile = %s")
+                update_values.append(json.dumps(resume_profile_data))
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON for resume_profile, skipping")
 
         # Only update if there are fields to update
         if not update_fields:

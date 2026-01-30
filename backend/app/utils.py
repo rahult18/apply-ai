@@ -199,6 +199,7 @@ def parse_resume(user_id: str, resume_url: str, llm: LLM):
                     {{
                         "company": "Company Name",
                         "position": "Job Title",
+                        "location": "City, State or City, Country",
                         "start_date": "YYYY-MM-DD",
                         "end_date": "YYYY-MM-DD or null if current",
                         "description": "Job responsibilities and achievements as a string"

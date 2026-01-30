@@ -108,7 +108,7 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   **Tabbed Interface (6 tabs)**:
   1. **Personal Tab**: full_name, email, first_name, last_name, phone_number
   2. **Links Tab**: linkedin_url, github_url, portfolio_url, other_url
-  3. **Location Tab**: address, city, state, zip_code, country
+  3. **Location Tab**: address, city, state, zip_code, country, open_to_relocation (checkbox)
   4. **Work Tab**:
      - authorized_to_work_in_us (checkbox)
      - visa_sponsorship (checkbox)
@@ -122,12 +122,13 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
        - "Completed" state with parsed data display
        - "Failed" state with retry button
        - Auto-retries up to 2 times with 30-second intervals
-     - **Parsed Resume Data Display** (when available):
-       - Skills as badges
-       - Experience cards with dates and descriptions
-       - Education cards with institution and degree
-       - Projects with links
-       - Certifications with credential URLs
+     - **Editable Resume Data Section** (always visible when not parsing):
+       - Summary: editable textarea
+       - Skills: badges with X delete button + input to add new skills (Enter key or Add button)
+       - Experience: editable cards with position, company, location, start_date, end_date, description; Add/Delete buttons per entry
+       - Education: editable cards with degree, field_of_study, institution, start_date, end_date; Add/Delete buttons per entry
+       - Supports manual entry without uploading a resume
+       - Submits `resume_profile` as JSON string in FormData on save
   6. **Demographics Tab (Optional)**:
      - gender (select: Male, Female, Non-binary, Prefer not to say)
      - race (select: multiple options)

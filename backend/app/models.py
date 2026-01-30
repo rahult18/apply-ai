@@ -58,6 +58,7 @@ class EducationEntry(BaseModel):
 class ExperienceEntry(BaseModel):
     company: str
     position: str
+    location: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     description: Optional[str] = None
