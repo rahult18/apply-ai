@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Header
-from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanRequest, AutofillPlanResponse, AutofillAgentInput, AutofillAgentOutput, AutofillEventRequest, AutofillFeedbackRequest, AutofillSubmitRequest, JobStatusRequest, JobStatusResponse
+from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanRequest, AutofillPlanResponse, AutofillAgentInput, AutofillAgentOutput, AutofillEventRequest, AutofillFeedbackRequest, AutofillSubmitRequest, JobStatusRequest, JobStatusResponse, ResumeMatchRequest, ResumeMatchResponse
 from app.services.supabase import Supabase
 from app.services.llm import LLM
 from app.services.autofill_agent_dag import DAG
@@ -607,3 +607,106 @@ def submit_autofill_application(body: AutofillSubmitRequest, authorization: str 
     except Exception as e:
         logger.info(f"Unable to submit autofill application: {str(e)}")
         raise HTTPException(status_code=500, detail="Unable to submit autofill application")
+
+
+@router.post("/resume-match")
+def get_resume_match(body: ResumeMatchRequest, authorization: str = Header(None)):
+    """
+    Compare user's resume against a job description and return match score with keywords.
+    """
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+        token = authorization.split("Bearer ")[1]
+        secret_key = os.getenv("SECRET_KEY")
+        algorithm = os.getenv("ALGORITHM")
+
+        try:
+            payload = jwt.decode(token, secret_key, algorithms=[algorithm], audience='applyai-extension', issuer='applyai-api')
+            user_id = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Invalid token")
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        if not check_if_job_application_belongs_to_user(user_id, body.job_application_id, supabase):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job application")
+
+        with supabase.db_connection.cursor() as cursor:
+            # Get JD keywords and skills
+            cursor.execute(
+                "SELECT required_skills, preferred_skills, keywords FROM public.job_applications WHERE id = %s",
+                (body.job_application_id,)
+            )
+            jd_row = cursor.fetchone()
+            if not jd_row:
+                raise HTTPException(status_code=404, detail="Job application not found")
+
+            required_skills = jd_row[0] or []
+            preferred_skills = jd_row[1] or []
+            keywords = jd_row[2] or []
+
+            # Get user's resume profile
+            cursor.execute(
+                "SELECT resume_profile FROM public.users WHERE id = %s",
+                (user_id,)
+            )
+            user_row = cursor.fetchone()
+            resume_profile = user_row[0] if user_row else None
+
+            if isinstance(resume_profile, str):
+                try:
+                    resume_profile = json.loads(resume_profile)
+                except json.JSONDecodeError:
+                    resume_profile = None
+
+        # Extract resume skills and text
+        resume_skills = []
+        resume_text = ""
+        if resume_profile:
+            resume_skills = resume_profile.get("skills") or []
+            # Build searchable text from experience and projects
+            for exp in resume_profile.get("experience") or []:
+                resume_text += f" {exp.get('position', '')} {exp.get('description', '')}"
+            for proj in resume_profile.get("projects") or []:
+                resume_text += f" {proj.get('name', '')} {proj.get('description', '')}"
+            resume_text = resume_text.lower()
+
+        # Combine all JD keywords (deduplicated)
+        jd_keywords = list(set(
+            [s.lower().strip() for s in required_skills] +
+            [s.lower().strip() for s in preferred_skills] +
+            [k.lower().strip() for k in keywords]
+        ))
+
+        # Normalize resume skills for matching
+        resume_skills_lower = [s.lower().strip() for s in resume_skills]
+
+        matched = []
+        missing = []
+
+        for kw in jd_keywords:
+            if not kw:
+                continue
+            # Check if keyword is in resume skills or text
+            if kw in resume_skills_lower or kw in resume_text:
+                matched.append(kw)
+            else:
+                missing.append(kw)
+
+        # Calculate score
+        total = len(matched) + len(missing)
+        score = round((len(matched) / total) * 100) if total > 0 else 0
+
+        return ResumeMatchResponse(
+            score=score,
+            matched_keywords=matched,
+            missing_keywords=missing
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.info(f"Unable to get resume match: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unable to get resume match")

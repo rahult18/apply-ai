@@ -199,3 +199,13 @@ class JobStatusResponse(BaseModel):
     job_application_id: Optional[str] = None
     job_title: Optional[str] = None
     company: Optional[str] = None
+
+
+class ResumeMatchRequest(BaseModel):
+    job_application_id: str
+
+
+class ResumeMatchResponse(BaseModel):
+    score: int  # 0-100
+    matched_keywords: list[str]
+    missing_keywords: list[str]

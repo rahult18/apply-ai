@@ -21,6 +21,8 @@ export const useExtension = () => {
   const [autofillStats, setAutofillStats] = useState(null);
   const [jobStatus, setJobStatus] = useState(null); // Response from /jobs/status endpoint
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [resumeMatch, setResumeMatch] = useState(null); // { score, matched_keywords, missing_keywords }
+  const [isLoadingMatch, setIsLoadingMatch] = useState(false);
 
   // Check connection status
   const checkConnection = useCallback(async () => {
@@ -185,6 +187,35 @@ export const useExtension = () => {
     });
   }, []);
 
+  // Fetch resume match score
+  const fetchResumeMatch = useCallback(async (jobApplicationId) => {
+    if (!jobApplicationId) return;
+
+    try {
+      setIsLoadingMatch(true);
+      const { extensionToken } = await storageGet(['extensionToken']);
+      if (!extensionToken) return;
+
+      const res = await fetch(`${API_BASE_URL}/extension/resume-match`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${extensionToken}`
+        },
+        body: JSON.stringify({ job_application_id: jobApplicationId })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setResumeMatch(data);
+      }
+    } catch (e) {
+      console.error('Resume match fetch failed:', e);
+    } finally {
+      setIsLoadingMatch(false);
+    }
+  }, []);
+
   // Listen to messages from background script
   useEffect(() => {
     const messageListener = (msg) => {
@@ -266,12 +297,15 @@ export const useExtension = () => {
     autofillStats,
     jobStatus,
     isCheckingStatus,
+    resumeMatch,
+    isLoadingMatch,
     connect,
     disconnect,
     openDashboard,
     extractJob,
     generateAutofill,
     debugExtractFields,
-    checkJobStatus
+    checkJobStatus,
+    fetchResumeMatch
   };
 };
