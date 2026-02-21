@@ -50,7 +50,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `auth.py` (118 lines): Handles user authentication:
       - `POST /auth/signup`: Registers a new user with email and password, creates Supabase auth user, inserts row into `public.users` table, and returns a session token or a message for email confirmation.
       - `POST /auth/login`: Authenticates a user with email and password, returns access_token and user info (email, id).
-      - `GET /auth/me`: Retrieves current user information using a Bearer token. Fetches from `auth.users` and `public.users` tables, returns email, id, first_name, full_name.
+      - `GET /auth/me`: Retrieves current user information using a Bearer token. Fetches from `auth.users` and `public.users` tables, returns email, id, first_name, full_name, avatar_url.
     - `db.py` (311 lines): Handles database interactions related to user profiles and job applications:
       - `GET /db/get-profile`: Retrieves the user's profile information from the `users` table, including a signed URL (1 hour expiry) for their resume if available in Supabase storage. Handles multiple signed URL response formats from Supabase SDK.
       - `GET /db/get-all-applications`: Fetches all job applications for the current user from the `job_applications` table ordered by created_at DESC. Converts tuples to dictionaries for JSON response.
@@ -84,7 +84,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       **Key Features**: Pre-extracted fields from browser, LLM-powered intelligent answers, confidence scoring (0.0-1.0), source tracking (profile|resume|jd|llm|unknown), fuzzy option matching, graceful error handling, comprehensive logging.
 
 ## Services
-- **Authentication**: User signup, login, and user info managed via Supabase's authentication service. Extension authentication uses custom JWT tokens with one-time code exchange.
+- **Authentication**: User signup, login, and user info managed via Supabase's authentication service. Supports email/password and Google OAuth (configured via Supabase Auth providers). Extension authentication uses custom JWT tokens with one-time code exchange.
 - **Job Ingestion**: Utilizes Google Generative AI (Gemini 2.5 Flash) to extract structured job descriptions from raw HTML content, either fetched from a URL or provided directly by the browser extension. Includes URL normalization and job site type inference.
 - **Resume Parsing**: Parses uploaded PDF resumes using PyMuPDF (fitz) for text extraction and Gemini 2.5 Flash for structured data extraction. Updates user profile with parsed resume data (skills, experience, education, certifications, projects).
 - **Autofill Agent**: LangGraph-based DAG that receives pre-extracted form fields from the browser extension (extracted using JavaScript DOMParser in the actual browser environment), converts them to internal format, enriches country fields automatically, generates contextual answers using LLM with user profile and resume data, and creates autofill plans. Supports telemetry, feedback collection, and submission tracking.
@@ -123,8 +123,9 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - Logging is configured to output to both console and timestamped log files in the `logs/` directory.
 - CORS is configured to allow requests from `http://localhost:3000` (Next.js frontend dev server).
 - Authentication uses two token systems:
-  - Supabase JWT tokens for web frontend (via `POST /auth/login` and `GET /auth/me`)
+  - Supabase JWT tokens for web frontend (via `POST /auth/login`, Google OAuth, and `GET /auth/me`)
   - Custom JWT tokens for browser extension (via one-time code exchange at `POST /extension/connect/exchange` and `GET /extension/me`)
+- Google OAuth is handled by Supabase Auth on the frontend; the backend receives the same Supabase JWT tokens regardless of auth method.
 - The autofill agent uses LangGraph for DAG execution and Gemini 2.5 Flash for LLM-powered form field answer generation.
 - Database operations use direct `psycopg2` connections for better control and transaction management.
 - Resume parsing and autofill plan generation are resource-intensive operations that use LLM API calls.
@@ -134,7 +135,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 
 Tables referenced in code:
 - `auth.users` - Supabase authentication (managed by Supabase)
-- `public.users` - User profiles and resume data (first_name, full_name, resume_url, resume_parse_status, open_to_relocation, resume_profile JSONB, etc.)
+- `public.users` - User profiles and resume data (first_name, full_name, avatar_url, resume_url, resume_parse_status, open_to_relocation, resume_profile JSONB, etc.)
 - `public.job_applications` - Job postings with normalized_url and jd_dom_html
 - `public.extension_connect_codes` - One-time codes for extension pairing (code_hash, expires_at, used)
 - `public.autofill_runs` - Autofill execution history (dom_html_hash, plan_json, plan_summary, status)
@@ -156,6 +157,10 @@ All public tables have RLS enabled with policies scoped to authenticated users:
 - **site_domain_map**: SELECT for all authenticated users (`USING (true)`)
 
 > **Note**: RLS applies to Supabase Data API (anon/authenticated roles). Direct `psycopg2` connections (used by the backend) bypass RLS as they connect as the `postgres` superuser.
+
+### Database Triggers
+
+- **handle_new_user**: Trigger function on `auth.users` that automatically creates a corresponding row in `public.users` when a new user signs up. For Google OAuth users, it also extracts and stores `full_name` and `avatar_url` from the user's Google metadata (`raw_user_meta_data`).
 
 ## Dependencies (requirements.txt)
 

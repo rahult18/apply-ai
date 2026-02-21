@@ -15,6 +15,7 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
 - **Theme**: next-themes 0.4.6 (dark mode support)
 - **State Management**: React Context API
 - **Font**: Inter (Google Fonts)
+- **Authentication**: @supabase/supabase-js 2.97.0, @supabase/ssr 0.8.0 (Google OAuth via Supabase)
 
 ## Structure
 
@@ -53,6 +54,14 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - Error handling and loading states
   - Link to login page
   - Calls `signup()` and `signupWithGoogle()` from AuthContext
+
+- **`auth/callback/route.ts`**: OAuth callback handler (~50 lines)
+  - Server-side route handler for Google OAuth callback
+  - Uses server-side Supabase client (`@/lib/supabase/server`)
+  - Exchanges OAuth code for session via `exchangeCodeForSession()`
+  - Sets `token` cookie with access token for backend API auth
+  - Handles OAuth errors and redirects to login with error message
+  - Redirects to `/home` on successful authentication
 
 - **`extension/layout.tsx`**: Extension section layout (~68 lines)
   - Client component with sidebar navigation
@@ -158,7 +167,9 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - User dropdown menu in footer:
     - Profile Settings link
     - Logout action
-  - User avatar with initials (first 2 characters of email)
+  - User avatar with profile picture (Google OAuth) or initials fallback
+    - Uses `AvatarImage` for Google profile pictures (`user.avatar_url`)
+    - Falls back to `AvatarFallback` with initials (first 2 characters of email)
   - Uses `usePathname()` for active route detection
   - Uses `useAuth()` for user state and logout function
 
@@ -238,12 +249,13 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
 
 ### `contexts/` - React Context
 
-- **`AuthContext.tsx`**: Authentication state management (~148 lines)
+- **`AuthContext.tsx`**: Authentication state management (~175 lines)
   - **User Interface**:
     - email: string
     - id: string
     - first_name?: string | null
     - full_name?: string | null
+    - avatar_url?: string | null (Google profile picture URL)
 
   - **State**:
     - `user`: User object (see interface above)
@@ -252,8 +264,8 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - **Functions**:
     - `login(email, password)`: POST to `/auth/login`, sets cookie, redirects to /home
     - `signup(email, password)`: POST to `/auth/signup`, sets cookie, redirects to /home
-    - `loginWithGoogle()`: Redirects to `/auth/google/login`
-    - `signupWithGoogle()`: Redirects to `/auth/google/signup`
+    - `loginWithGoogle()`: Uses Supabase `signInWithOAuth({ provider: 'google' })`, redirects to `/auth/callback`
+    - `signupWithGoogle()`: Same as loginWithGoogle (OAuth handles both)
     - `logout()`: Clears cookie, redirects to /login
 
   - **Cookie Management**:
@@ -276,6 +288,17 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - `cn()`: Combines Tailwind classes using clsx and tailwind-merge
   - Used throughout app for conditional className styling
 
+- **`supabase/`**: Supabase client utilities for Google OAuth
+  - **`client.ts`** (~8 lines): Browser-side Supabase client
+    - Uses `createBrowserClient()` from `@supabase/ssr`
+    - Configured with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+    - Used in AuthContext for `signInWithOAuth()` calls
+  - **`server.ts`** (~27 lines): Server-side Supabase client
+    - Uses `createServerClient()` from `@supabase/ssr`
+    - Configured with cookie handling via `next/headers`
+    - Used in `/auth/callback` route for `exchangeCodeForSession()`
+    - Supports reading and writing cookies for PKCE flow
+
 ## Backend API Integration
 
 The frontend communicates with the backend API at `http://localhost:8000` (configurable via `NEXT_PUBLIC_API_URL`).
@@ -283,9 +306,14 @@ The frontend communicates with the backend API at `http://localhost:8000` (confi
 ### Authentication Endpoints
 - `POST /auth/login` - Email/password login
 - `POST /auth/signup` - Email/password signup
-- `GET /auth/me` - Validate token and get user info
-- `GET /auth/google/login` - Google OAuth login (redirect)
-- `GET /auth/google/signup` - Google OAuth signup (redirect)
+- `GET /auth/me` - Validate token and get user info (includes avatar_url)
+
+### Google OAuth (via Supabase)
+- Google OAuth is handled directly by Supabase, not through the backend
+- Frontend calls `supabase.auth.signInWithOAuth({ provider: 'google' })`
+- Supabase redirects to Google consent screen
+- Google redirects back to `/auth/callback` with OAuth code
+- Callback route exchanges code for session and sets token cookie
 
 ### Database Endpoints
 - `GET /db/get-all-applications` - Fetch all user's applications
