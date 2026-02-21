@@ -91,25 +91,28 @@ def get_current_user(authorization: str = Header(None)):
 
         user_id = user_response.user.id
 
-        # Fetch user's name from the users table
+        # Fetch user's name and avatar from the users table
         first_name = None
         full_name = None
+        avatar_url = None
         try:
             with supabase.db_connection.cursor() as cursor:
-                cursor.execute("SELECT first_name, full_name FROM users WHERE id = %s", (user_id,))
+                cursor.execute("SELECT first_name, full_name, avatar_url FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 if row:
                     first_name = row[0]
                     full_name = row[1]
+                    avatar_url = row[2]
         except Exception as db_error:
-            logger.warning(f"Could not fetch user name: {str(db_error)}")
+            logger.warning(f"Could not fetch user data: {str(db_error)}")
 
         # Return user info as expected by frontend
         return {
             "email": user_response.user.email,
             "id": user_id,
             "first_name": first_name,
-            "full_name": full_name
+            "full_name": full_name,
+            "avatar_url": avatar_url
         }
     except HTTPException:
         raise

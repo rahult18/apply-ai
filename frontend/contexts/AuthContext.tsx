@@ -2,12 +2,14 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from "react"
 import { useRouter } from "next/navigation"
+import { createClient } from "@/lib/supabase/client"
 
 interface User {
   email: string
   id: string
   first_name?: string | null
   full_name?: string | null
+  avatar_url?: string | null
 }
 
 interface AuthContextType {
@@ -23,6 +25,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const supabase = createClient()
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -107,11 +110,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const loginWithGoogle = async () => {
-    window.location.href = `${API_URL}/auth/google/login`
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    if (data.url) {
+      window.location.href = data.url
+    }
   }
 
   const signupWithGoogle = async () => {
-    window.location.href = `${API_URL}/auth/google/signup`
+    // Google OAuth handles both login and signup
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    if (data.url) {
+      window.location.href = data.url
+    }
   }
 
   const logout = async () => {

@@ -23,7 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCloudBolt } from '@fortawesome/free-solid-svg-icons'
 import {
@@ -115,6 +115,9 @@ export function AppSidebar() {
                   className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 >
                   <Avatar className="h-8 w-8 rounded-lg">
+                    {user?.avatar_url && (
+                      <AvatarImage src={user.avatar_url} alt={user?.full_name || "User"} />
+                    )}
                     <AvatarFallback className="rounded-lg bg-primary text-primary-foreground">
                       {user?.email ? getInitials(user.email) : "U"}
                     </AvatarFallback>
