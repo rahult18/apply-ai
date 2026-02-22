@@ -52,6 +52,33 @@ async function extractDomHtmlFromTab(tabId) {
     return result || { url: "", dom_html: "" };
 }
 
+/**
+ * Helper: Log autofill event to backend (fire and forget)
+ */
+async function logAutofillEvent(runId, eventType, payload = {}) {
+    try {
+        const { extensionToken } = await storageGet(["extensionToken"]);
+        if (!extensionToken || !runId) return;
+
+        await fetch(`${API_BASE_URL}/extension/autofill/event`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${extensionToken}`
+            },
+            body: JSON.stringify({
+                run_id: runId,
+                event_type: eventType,
+                payload
+            })
+        });
+        console.log(`ApplyAI: logged event '${eventType}' for run ${runId}`);
+    } catch (e) {
+        // Fire and forget - don't block on logging errors
+        console.warn("ApplyAI: failed to log event", e);
+    }
+}
+
 async function extractFormFieldsFromTab(tabId) {
     const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
@@ -1605,6 +1632,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     actionCounts,
                     plan_summary: planData?.plan_summary || null
                 });
+
+                // Log event: plan received
+                if (planData?.run_id) {
+                    logAutofillEvent(planData.run_id, "autofill_plan_received", {
+                        field_count: planFields.length,
+                        action_counts: actionCounts,
+                        status: planData?.status
+                    });
+                }
+
                 if (!planJson) {
                     sendResponse({ ok: false, error: "No autofill plan returned." });
                     return;
@@ -1616,6 +1653,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 console.log("ApplyAI autofill result:", applyResult);
                 if (applyResult?.debug) {
                     console.log("ApplyAI autofill debug:", applyResult.debug);
+                }
+
+                // Log event: autofill applied
+                if (planData?.run_id) {
+                    logAutofillEvent(planData.run_id, "autofill_applied", {
+                        filled: applyResult?.filled || 0,
+                        skipped: applyResult?.skipped || 0,
+                        errors: applyResult?.errors || []
+                    });
                 }
 
                 chrome.runtime.sendMessage(
@@ -1640,6 +1686,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 return;
             }
 
+            /**
+             * Mark application as applied
+             */
+            if (message?.type === "APPLYAI_MARK_APPLIED" && message?.run_id) {
+                const { extensionToken } = await storageGet(["extensionToken"]);
+                if (!extensionToken) {
+                    sendResponse({ ok: false, error: "Not connected. Please connect first." });
+                    return;
+                }
+
+                const res = await fetch(`${API_BASE_URL}/extension/autofill/submit`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${extensionToken}`
+                    },
+                    body: JSON.stringify({
+                        run_id: message.run_id,
+                        payload: { marked_at: new Date().toISOString() }
+                    })
+                });
+
+                if (!res.ok) {
+                    const text = await res.text().catch(() => "");
+                    throw new Error(`Failed to mark as applied: ${res.status} ${text}`);
+                }
+
+                // Notify popup of success
+                chrome.runtime.sendMessage(
+                    { type: "APPLYAI_MARK_APPLIED_RESULT", ok: true },
+                    () => void chrome.runtime.lastError
+                );
+
+                sendResponse({ ok: true });
+                return;
+            }
+
             // default: ignore
             sendResponse({ ok: false, error: "Ignoring message (unknown type)." });
         } catch (err) {
@@ -1656,10 +1739,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 });
             } catch (_) { }
 
-            const errorMessageType =
-                message?.type === "APPLYAI_AUTOFILL_PLAN"
-                    ? "APPLYAI_AUTOFILL_RESULT"
-                    : "APPLYAI_EXTRACT_JD_RESULT";
+            let errorMessageType = "APPLYAI_EXTRACT_JD_RESULT";
+            if (message?.type === "APPLYAI_AUTOFILL_PLAN") {
+                errorMessageType = "APPLYAI_AUTOFILL_RESULT";
+            } else if (message?.type === "APPLYAI_MARK_APPLIED") {
+                errorMessageType = "APPLYAI_MARK_APPLIED_RESULT";
+            }
 
             chrome.runtime.sendMessage(
                 { type: errorMessageType, ok: false, error: msg },

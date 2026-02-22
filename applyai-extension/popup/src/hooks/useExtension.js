@@ -23,6 +23,8 @@ export const useExtension = () => {
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [resumeMatch, setResumeMatch] = useState(null); // { score, matched_keywords, missing_keywords }
   const [isLoadingMatch, setIsLoadingMatch] = useState(false);
+  const [lastRunId, setLastRunId] = useState(null); // Store run_id from last autofill for marking as applied
+  const [isMarkingApplied, setIsMarkingApplied] = useState(false);
 
   // Check connection status
   const checkConnection = useCallback(async () => {
@@ -104,6 +106,11 @@ export const useExtension = () => {
           setSessionState('autofilled');
         } else if (status.state === 'jd_extracted') {
           setSessionState('extracted');
+        }
+
+        // Restore lastRunId so "Mark as Applied" works after popup is reopened
+        if (status.run_id) {
+          setLastRunId(status.run_id);
         }
       } else {
         // No job found for this URL
@@ -216,6 +223,31 @@ export const useExtension = () => {
     }
   }, []);
 
+  // Mark application as applied
+  const markAsApplied = useCallback(() => {
+    if (!lastRunId) {
+      setStatusMessage('No autofill run to mark as applied');
+      return;
+    }
+
+    setIsMarkingApplied(true);
+    setStatusMessage('Marking as applied...');
+
+    chrome.runtime.sendMessage({
+      type: 'APPLYAI_MARK_APPLIED',
+      run_id: lastRunId
+    }, (resp) => {
+      if (chrome.runtime.lastError) {
+        setIsMarkingApplied(false);
+        setStatusMessage(`Error: ${chrome.runtime.lastError.message}`);
+      } else if (!resp?.ok) {
+        setIsMarkingApplied(false);
+        setStatusMessage(`Error: ${resp?.error || 'Unknown error'}`);
+      }
+      // Success handled by message listener
+    });
+  }, [lastRunId]);
+
   // Listen to messages from background script
   useEffect(() => {
     const messageListener = (msg) => {
@@ -265,9 +297,25 @@ export const useExtension = () => {
             filled: msg.filled,
             skipped: msg.skipped
           });
+          // Store run_id for marking as applied later
+          if (msg.run_id) {
+            setLastRunId(msg.run_id);
+          }
         } else {
           setSessionState('extracted');
           setStatusMessage(`Autofill failed: ${msg.error || 'Unknown error'}`);
+        }
+      }
+
+      if (msg?.type === 'APPLYAI_MARK_APPLIED_RESULT') {
+        setIsMarkingApplied(false);
+        if (msg.ok) {
+          setSessionState('applied');
+          setStatusMessage('Application marked as applied!');
+          // Refresh job status
+          checkJobStatus();
+        } else {
+          setStatusMessage(`Failed to mark as applied: ${msg.error || 'Unknown error'}`);
         }
       }
     };
@@ -299,6 +347,7 @@ export const useExtension = () => {
     isCheckingStatus,
     resumeMatch,
     isLoadingMatch,
+    isMarkingApplied,
     connect,
     disconnect,
     openDashboard,
@@ -306,6 +355,7 @@ export const useExtension = () => {
     generateAutofill,
     debugExtractFields,
     checkJobStatus,
-    fetchResumeMatch
+    fetchResumeMatch,
+    markAsApplied
   };
 };

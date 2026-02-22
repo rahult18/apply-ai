@@ -8,7 +8,7 @@ import JobCard from './components/JobCard';
 import ActionButton from './components/ActionButton';
 import Tabs from './components/Tabs';
 import ResumeMatchCard from './components/ResumeMatchCard';
-import { BoltIcon, Squares2X2Icon, BugAntIcon, CheckIcon } from './components/Icons';
+import { BoltIcon, Squares2X2Icon, BugAntIcon, CheckIcon, CheckBadgeIcon } from './components/Icons';
 
 const TABS = [
   { id: 'autofill', label: 'Autofill' },
@@ -28,13 +28,15 @@ const Popup = () => {
     isCheckingStatus,
     resumeMatch,
     isLoadingMatch,
+    isMarkingApplied,
     connect,
     disconnect,
     openDashboard,
     extractJob,
     generateAutofill,
     debugExtractFields,
-    fetchResumeMatch
+    fetchResumeMatch,
+    markAsApplied
   } = useExtension();
 
   // Fetch resume match when switching to match tab
@@ -124,6 +126,20 @@ const Popup = () => {
                       {autofillStats.skipped > 0 && `, skipped ${autofillStats.skipped}`}
                     </span>
                   </div>
+                )}
+
+                {/* Mark as Applied Button - shows after autofill */}
+                {sessionState === 'autofilled' && (
+                  <ActionButton
+                    onClick={markAsApplied}
+                    loading={isMarkingApplied}
+                    disabled={isMarkingApplied}
+                    icon={CheckBadgeIcon}
+                    variant="primary"
+                    size="md"
+                  >
+                    Mark as Applied
+                  </ActionButton>
                 )}
 
                 {/* Applied Badge */}

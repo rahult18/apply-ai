@@ -199,6 +199,7 @@ class JobStatusResponse(BaseModel):
     job_application_id: Optional[str] = None
     job_title: Optional[str] = None
     company: Optional[str] = None
+    run_id: Optional[str] = None  # Most recent completed autofill run_id (for mark-as-applied)
 
 
 class ResumeMatchRequest(BaseModel):
@@ -209,3 +210,16 @@ class ResumeMatchResponse(BaseModel):
     score: int  # 0-100
     matched_keywords: list[str]
     missing_keywords: list[str]
+
+
+class AutofillEventResponse(BaseModel):
+    id: str
+    run_id: str
+    event_type: str
+    payload: Optional[dict] = None
+    created_at: str  # ISO format datetime string
+
+
+class AutofillEventsListResponse(BaseModel):
+    events: list[AutofillEventResponse]
+    total_count: int

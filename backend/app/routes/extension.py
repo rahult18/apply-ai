@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Header
-from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanRequest, AutofillPlanResponse, AutofillAgentInput, AutofillAgentOutput, AutofillEventRequest, AutofillFeedbackRequest, AutofillSubmitRequest, JobStatusRequest, JobStatusResponse, ResumeMatchRequest, ResumeMatchResponse
+from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanRequest, AutofillPlanResponse, AutofillAgentInput, AutofillAgentOutput, AutofillEventRequest, AutofillFeedbackRequest, AutofillSubmitRequest, JobStatusRequest, JobStatusResponse, ResumeMatchRequest, ResumeMatchResponse, AutofillEventResponse, AutofillEventsListResponse
 from app.services.supabase import Supabase
 from app.services.llm import LLM
 from app.services.autofill_agent_dag import DAG
@@ -303,17 +303,27 @@ def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
             job_status = job_record[3]
 
             # Determine application state based on job_applications.status and autofill_runs
+            run_id = None
             if job_status == "applied":
                 state = "applied"
-            else:
-                # Check if any completed autofill run exists
+                # Fetch the most recent run_id even for applied state (for reference)
                 cursor.execute(
-                    "SELECT COUNT(*) FROM public.autofill_runs WHERE job_application_id = %s AND user_id = %s AND status = 'completed'",
+                    "SELECT id FROM public.autofill_runs WHERE job_application_id = %s AND user_id = %s AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
                     (job_application_id, user_id)
                 )
-                autofill_count = cursor.fetchone()[0]
-                if autofill_count > 0:
+                run_record = cursor.fetchone()
+                if run_record:
+                    run_id = str(run_record[0])
+            else:
+                # Check if any completed autofill run exists and get the most recent run_id
+                cursor.execute(
+                    "SELECT id FROM public.autofill_runs WHERE job_application_id = %s AND user_id = %s AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
+                    (job_application_id, user_id)
+                )
+                run_record = cursor.fetchone()
+                if run_record:
                     state = "autofill_generated"
+                    run_id = str(run_record[0])
                 else:
                     state = "jd_extracted"
 
@@ -325,7 +335,8 @@ def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
                 state=state,
                 job_application_id=job_application_id,
                 job_title=job_title,
-                company=company
+                company=company,
+                run_id=run_id
             )
 
     except HTTPException:
@@ -523,7 +534,7 @@ def push_autofill_event(body: AutofillEventRequest, authorization: str = Header(
         
         # Store the event in the database
         with supabase.db_connection.cursor() as cursor:
-            cursor.execute("INSERT INTO public.autofill_events (run_id, user_id, event_type, payload, created_at) VALUES(%s, %s, %s, %s, NOW())", (body.run_id, user_id, body.event_type, body.payload))
+            cursor.execute("INSERT INTO public.autofill_events (run_id, user_id, event_type, payload, created_at) VALUES(%s, %s, %s, %s, NOW())", (body.run_id, user_id, body.event_type, json.dumps(body.payload) if body.payload is not None else None))
             supabase.db_connection.commit()
 
         return {"status": "success"}
@@ -597,7 +608,7 @@ def submit_autofill_application(body: AutofillSubmitRequest, authorization: str 
             cursor.execute("UPDATE public.job_applications SET status = 'applied', updated_at = NOW() WHERE id = (SELECT job_application_id FROM public.autofill_runs WHERE id = %s)", (body.run_id,))
             
             # insert an event in the public.autofill_events table
-            cursor.execute("INSERT INTO public.autofill_events (run_id, user_id, event_type, payload, created_at) VALUES(%s, %s, %s, %s, NOW())", (body.run_id, user_id, 'application_submitted', body.payload))
+            cursor.execute("INSERT INTO public.autofill_events (run_id, user_id, event_type, payload, created_at) VALUES(%s, %s, %s, %s, NOW())", (body.run_id, user_id, 'application_submitted', json.dumps(body.payload) if body.payload is not None else None))
 
             supabase.db_connection.commit()
 
@@ -710,3 +721,60 @@ def get_resume_match(body: ResumeMatchRequest, authorization: str = Header(None)
     except Exception as e:
         logger.info(f"Unable to get resume match: {str(e)}")
         raise HTTPException(status_code=500, detail="Unable to get resume match")
+
+
+@router.get("/autofill/events/{job_application_id}")
+def get_autofill_events(job_application_id: str, authorization: str = Header(None)):
+    """
+    Get all autofill events for a job application.
+    Returns events in reverse chronological order (newest first).
+    Called from the web frontend dashboard using a Supabase JWT token.
+    """
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+        token = authorization.split("Bearer ")[1]
+
+        # Use Supabase auth (same as /db endpoints) since this is called from the web frontend
+        user_response = supabase.client.auth.get_user(jwt=token)
+        if user_response.user is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        user_id = user_response.user.id
+
+        if not check_if_job_application_belongs_to_user(user_id, job_application_id, supabase):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job application")
+
+        with supabase.db_connection.cursor() as cursor:
+            # Get events for all runs associated with this job application
+            cursor.execute("""
+                SELECT e.id, e.run_id, e.event_type, e.payload, e.created_at
+                FROM public.autofill_events e
+                JOIN public.autofill_runs r ON e.run_id = r.id
+                WHERE r.job_application_id = %s AND r.user_id = %s
+                ORDER BY e.created_at DESC
+                LIMIT 100
+            """, (job_application_id, user_id))
+
+            rows = cursor.fetchall()
+
+            events = []
+            for row in rows:
+                events.append(AutofillEventResponse(
+                    id=str(row[0]),
+                    run_id=str(row[1]),
+                    event_type=row[2],
+                    payload=row[3] if row[3] else None,
+                    created_at=row[4].isoformat() if row[4] else None
+                ))
+
+            return AutofillEventsListResponse(
+                events=events,
+                total_count=len(events)
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.info(f"Unable to get autofill events: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unable to get autofill events")

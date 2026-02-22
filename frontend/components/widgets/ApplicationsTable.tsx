@@ -26,7 +26,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { CheckCircle2, XCircle, ExternalLink, Search, MoreHorizontal, ArrowUpDown, ChevronLeft, ChevronRight } from "lucide-react"
+import { CheckCircle2, XCircle, ExternalLink, Search, MoreHorizontal, ArrowUpDown, ChevronLeft, ChevronRight, Eye } from "lucide-react"
+import Link from "next/link"
 
 interface JobApplication {
   id: string
@@ -270,6 +271,15 @@ export function ApplicationsTable({ applications }: ApplicationsTableProps) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          <DropdownMenuItem asChild>
+                            <Link
+                              href={`/home/applications/${app.id}`}
+                              className="flex items-center"
+                            >
+                              <Eye className="mr-2 h-4 w-4" />
+                              View Details
+                            </Link>
+                          </DropdownMenuItem>
                           <DropdownMenuItem asChild>
                             <a
                               href={app.url}
