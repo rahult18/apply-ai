@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 function getPageTitle(pathname: string): string {
   if (pathname === "/home") return "Dashboard"
+  if (pathname === "/home/discover") return "Discover Jobs"
   if (pathname === "/home/profile") return "Profile Settings"
   if (pathname === "/extension/connect") return "Connect Extension"
   return "Dashboard"

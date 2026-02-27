@@ -32,6 +32,7 @@ import {
   Puzzle,
   LogOut,
   ChevronUp,
+  Compass,
 } from "lucide-react"
 
 const navItems = [
@@ -39,6 +40,11 @@ const navItems = [
     title: "Dashboard",
     url: "/home",
     icon: LayoutDashboard,
+  },
+  {
+    title: "Discover Jobs",
+    url: "/home/discover",
+    icon: Compass,
   },
   {
     title: "Profile",

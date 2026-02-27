@@ -29,11 +29,16 @@ app.add_middleware(
 )
 
 # Include routers
-from app.routes import auth, db, extension
+from app.routes import auth, db, extension, discovery, sync, jobs
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(db.router, prefix="/db", tags=["db"])
 app.include_router(extension.router, prefix="/extension", tags=["extension"])
+
+# Job discovery and ingestion routers
+app.include_router(discovery.router, prefix="/discovery", tags=["discovery"])
+app.include_router(sync.router, prefix="/sync", tags=["sync"])
+app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 
 # Health check endpoint
 @app.get("/")

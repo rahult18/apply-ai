@@ -223,3 +223,109 @@ class AutofillEventResponse(BaseModel):
 class AutofillEventsListResponse(BaseModel):
     events: list[AutofillEventResponse]
     total_count: int
+
+
+# ===== Job Discovery and Ingestion Models =====
+
+from enum import Enum
+from datetime import datetime
+from pydantic import Field
+
+
+class JobBoardProvider(str, Enum):
+    """Supported job board providers"""
+    ASHBY = "ashby"
+    LEVER = "lever"
+    GREENHOUSE = "greenhouse"
+
+
+# --- Discovery Endpoint Models ---
+
+class DiscoveryRunRequest(BaseModel):
+    """Request body for POST /discovery/run"""
+    query: str = Field(..., min_length=1, max_length=500, description="Search query for job boards")
+    providers: list[JobBoardProvider] = Field(
+        default=[JobBoardProvider.ASHBY, JobBoardProvider.LEVER, JobBoardProvider.GREENHOUSE],
+        description="Providers to search"
+    )
+    max_results: int = Field(default=50, ge=1, le=200, description="Max SERP results per provider")
+
+
+class DiscoveredBoard(BaseModel):
+    """A single discovered job board"""
+    provider: JobBoardProvider
+    board_identifier: str
+    canonical_url: str
+    company_name: Optional[str] = None
+    is_new: bool  # True if newly discovered, False if already existed
+
+
+class DiscoveryRunResponse(BaseModel):
+    """Response from POST /discovery/run"""
+    total_urls_found: int
+    valid_boards_parsed: int
+    new_boards_created: int
+    existing_boards_updated: int
+    boards: list[DiscoveredBoard]
+    errors: list[str] = []
+
+
+# --- Sync Endpoint Models ---
+
+class SyncRunRequest(BaseModel):
+    """Request body for POST /sync/run"""
+    providers: Optional[list[JobBoardProvider]] = Field(
+        default=None,
+        description="Providers to sync (None = all)"
+    )
+    limit_boards: int = Field(default=100, ge=1, le=1000, description="Max boards to sync")
+
+
+class BoardSyncResult(BaseModel):
+    """Result of syncing a single board"""
+    board_id: str
+    provider: JobBoardProvider
+    board_identifier: str
+    jobs_fetched: int
+    jobs_created: int
+    jobs_updated: int
+    success: bool
+    error: Optional[str] = None
+
+
+class SyncRunResponse(BaseModel):
+    """Response from POST /sync/run"""
+    boards_processed: int
+    total_jobs_fetched: int
+    total_jobs_created: int
+    total_jobs_updated: int
+    failed_boards: int
+    results: list[BoardSyncResult]
+
+
+# --- Jobs Public Endpoint Models ---
+
+class DiscoveredJobResponse(BaseModel):
+    """A single job from discovered_jobs table"""
+    id: str
+    board_id: str
+    provider: JobBoardProvider
+    company_name: Optional[str]
+    external_id: str
+    title: str
+    location: Optional[str]
+    is_remote: bool
+    department: Optional[str]
+    team: Optional[str]
+    apply_url: str
+    description: Optional[str]
+    posted_at: Optional[datetime]
+
+
+class JobsListResponse(BaseModel):
+    """Response from GET /jobs"""
+    jobs: list[DiscoveredJobResponse]
+    total_count: int
+    limit: int
+    offset: int
+    has_more: bool

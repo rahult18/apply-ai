@@ -2,7 +2,7 @@
 
 This folder contains the Next.js 14 frontend for the Application Tracker (ApplyAI) project. Built with TypeScript, React, and Tailwind CSS, it provides the user interface for authentication, job application tracking, profile management, and browser extension integration.
 
-**Total Source Files**: ~50 files (excluding node_modules and .next)
+**Total Source Files**: ~55 files (excluding node_modules and .next)
 
 ## Tech Stack
 - **Framework**: Next.js 14.2.0 with App Router
@@ -86,9 +86,33 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - Authentication check with redirect to /login if not authenticated
   - Dynamic page title based on pathname:
     - "/home" → "Dashboard"
+    - "/home/discover" → "Discover Jobs"
     - "/home/profile" → "Profile Settings"
   - Breadcrumb navigation
   - Loading skeleton while checking authentication
+
+- **`home/discover/page.tsx`**: Discover Jobs page (~277 lines)
+  - Client component for browsing discovered jobs from `GET /jobs` API
+  - **State Management**:
+    - `filters` (UI state for responsive typing)
+    - `debouncedFilters` (API-triggering state with 400ms debounce for text inputs)
+    - `jobs`, `totalCount`, `currentPage`, `isLoading`, `error`
+  - **Debouncing**: Text inputs (keyword, location) debounced at 400ms; dropdown changes (provider, remote) apply immediately
+  - **Features**:
+    - Keyword search (full-text)
+    - Provider filter (All, Ashby, Lever, Greenhouse)
+    - Remote filter (Any, Remote Only, On-site Only)
+    - Location text filter
+    - Pagination (20 items per page)
+    - Clear filters button
+  - **Layout**:
+    - Header with title and description
+    - JobFilters component
+    - Results count
+    - 3-column grid (lg), 2-column (md), 1-column (mobile)
+    - Pagination controls
+  - **States**: Loading skeletons, empty state, error state with retry
+  - Uses `JobCard` and `JobFilters` widgets
 
 - **`home/page.tsx`**: Main dashboard (~270 lines)
   - Client component displaying job application analytics
@@ -158,8 +182,9 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
 
 - **`AppSidebar.tsx`**: Sidebar navigation (~164 lines)
   - Client component using shadcn SidebarProvider
-  - **Navigation Items** (3 items):
+  - **Navigation Items** (4 items):
     - Dashboard → /home (LayoutDashboard icon)
+    - Discover Jobs → /home/discover (Compass icon)
     - Profile → /home/profile (User icon)
     - Connect Extension → /extension/connect (Puzzle icon)
   - Active route highlighting based on pathname
@@ -189,7 +214,28 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - **Data Display**: table, tabs, chart (Recharts integration)
   - **Feedback**: sonner (toast notifications)
 
-- **`widgets/`**: Dashboard visualization components
+- **`widgets/`**: Dashboard and job discovery components
+
+  - **`JobCard.tsx`** (~113 lines): Displays a discovered job posting
+    - Provider badge with color coding:
+      - Ashby: purple (bg-purple-100, text-purple-700)
+      - Lever: green (bg-green-100, text-green-700)
+      - Greenhouse: orange (bg-orange-100, text-orange-700)
+    - Relative date formatting (Today, Yesterday, X days ago, X weeks ago, etc.)
+    - Job title, company name
+    - Location with MapPin icon
+    - Remote badge (blue) if `is_remote` is true
+    - Department with Building2 icon
+    - Description preview (truncated, HTML stripped)
+    - Apply button opens `apply_url` in new tab
+
+  - **`JobFilters.tsx`** (~116 lines): Filter controls for job search
+    - Search input with Search icon (keyword search)
+    - Provider dropdown: All, Ashby, Lever, Greenhouse
+    - Remote dropdown: Any, Remote Only, On-site Only
+    - Location text input
+    - Clear filters button (X icon) when any filter is active
+    - All inputs disabled during loading
 
   - **`KPICard.tsx`** (~50 lines):
     - Displays single metric with icon
@@ -282,11 +328,26 @@ This folder contains the Next.js 14 frontend for the Application Tracker (ApplyA
   - **Export**: `AuthProvider` component and `useAuth()` hook
   - Error handling with custom error messages from backend (detail field)
 
+### `types/` - TypeScript Type Definitions
+
+- **`jobs.ts`** (~35 lines): Types for job discovery feature
+  - `JobBoardProvider`: Union type `"ashby" | "lever" | "greenhouse"`
+  - `DiscoveredJob`: Interface matching backend response (id, board_id, provider, company_name, external_id, title, location, is_remote, department, team, apply_url, description, posted_at)
+  - `JobsListResponse`: Paginated response (jobs array, total_count, limit, offset, has_more)
+  - `JobFilters`: Filter state interface (keyword, provider, remote, location)
+
 ### `lib/` - Utilities
 
 - **`utils.ts`**: Utility functions
   - `cn()`: Combines Tailwind classes using clsx and tailwind-merge
   - Used throughout app for conditional className styling
+
+- **`api/`**: API client functions
+  - **`jobs.ts`** (~51 lines): Fetches discovered jobs from backend
+    - `FetchJobsParams`: Interface for query params (keyword, provider, location, remote, limit, offset)
+    - `fetchJobs(params)`: Calls `GET /jobs` endpoint with URL params
+    - Uses `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`)
+    - Returns `JobsListResponse`
 
 - **`supabase/`**: Supabase client utilities for Google OAuth
   - **`client.ts`** (~8 lines): Browser-side Supabase client
@@ -320,10 +381,32 @@ The frontend communicates with the backend API at `http://localhost:8000` (confi
 - `GET /db/get-profile` - Fetch user profile
 - `POST /db/update-profile` - Update user profile (multipart/form-data)
 
+### Job Discovery Endpoints (Public)
+- `GET /jobs` - Fetch discovered jobs with filters (keyword, provider, location, remote, limit, offset)
+
 ### Extension Endpoints
 - `POST /extension/connect/start` - Generate one-time code for extension authentication
 
 ## Data Models
+
+### DiscoveredJob Interface
+```typescript
+{
+  id: string
+  board_id: string
+  provider: "ashby" | "lever" | "greenhouse"
+  company_name: string | null
+  external_id: string
+  title: string
+  location: string | null
+  is_remote: boolean
+  department: string | null
+  team: string | null
+  apply_url: string
+  description: string | null
+  posted_at: string | null
+}
+```
 
 ### JobApplication Interface
 ```typescript
@@ -464,12 +547,14 @@ The frontend communicates with the backend API at `http://localhost:8000` (confi
 ├── /login
 ├── /signup
 ├── /home (dashboard) ─── Sidebar Layout
+│   ├── /home/discover
 │   └── /home/profile
 └── /extension/connect ─── Sidebar Layout
 ```
 
 **Sidebar Navigation** (AppSidebar):
 - Dashboard → /home
+- Discover Jobs → /home/discover
 - Profile → /home/profile
 - Connect Extension → /extension/connect
 

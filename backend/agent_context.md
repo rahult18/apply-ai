@@ -1,8 +1,8 @@
 # Agent Context: backend
 
-This folder contains the FastAPI backend for the Application Tracker project. It provides RESTful API endpoints for authentication, job scraping, and integration with Supabase and Google Generative AI.
+This folder contains the FastAPI backend for the Application Tracker project. It provides RESTful API endpoints for authentication, job scraping, job discovery & ingestion, and integration with Supabase and Google Generative AI.
 
-**Total Application Code: ~2,900 lines**
+**Total Application Code: ~4,000 lines**
 
 ## Structure
 - `main.py` (64 lines): Entry point for the FastAPI server. Contains `build_log_config(log_file: str) -> dict` function for logging configuration. Configures logging to both console and timestamped file (in `logs/` directory as `backend_YYYYMMDD_HHMMSS.log`), then uses `uvicorn` to run the `app` from `app.api` on `0.0.0.0:8000` with hot reload enabled.
@@ -10,8 +10,9 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `.env` / `.env.example`: Environment variables (Supabase, Google GenAI, JWT secret key, etc.).
 - `app/`: Main application package.
   - `__init__.py`: Package initializer.
-  - `api.py` (41 lines): Configures the FastAPI application, sets up CORS middleware (allows `http://localhost:3000`), and includes three routers (`/auth`, `/db`, `/extension`). Defines health check endpoint at `GET /` returning `{"status": "ok"}`.
-  - `models.py` (~200 lines): Defines Pydantic models for request bodies and data structures:
+  - `api.py` (~50 lines): Configures the FastAPI application, sets up CORS middleware (allows `http://localhost:3000`), and includes six routers (`/auth`, `/db`, `/extension`, `/discovery`, `/sync`, `/jobs`). Defines health check endpoint at `GET /` returning `{"status": "ok"}`.
+  - `models.py` (~280 lines): Defines Pydantic models for request bodies and data structures:
+    - `JobBoardProvider`: Enum with values `ashby`, `lever`, `greenhouse` for job board providers.
     - `JD`: Represents a job description with fields like `job_title`, `company`, `job_description`, `required_skills`, etc.
     - `RequestBody`: Used for authentication (e.g., `email`, `password`).
     - `UpdateProfileBody`: Used for updating user profile information.
@@ -27,10 +28,19 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `AutofillAgentOutput`: Output model from the autofill agent with status, plan_json, and plan_summary.
     - `JobStatusRequest`: Request model for job status lookup with `url` field.
     - `JobStatusResponse`: Response model containing `found`, `page_type` (jd|application|combined|unknown), `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`.
-  - `utils.py` (~380 lines): Contains utility functions:
+    - **Job Discovery Models**:
+      - `DiscoveryRunRequest`: Request model for discovery run with `query`, `providers` (list of JobBoardProvider), `max_results`.
+      - `DiscoveryRunResponse`: Response with `total_urls_found`, `valid_boards_parsed`, `new_boards_created`, `existing_boards_updated`.
+      - `SyncRunRequest`: Request model for sync run with `providers` (optional), `limit_boards`.
+      - `SyncRunResponse`: Response with `boards_processed`, `total_jobs_fetched`, `total_jobs_created`, `failed_boards`.
+      - `DiscoveredJobResponse`: Model for discovered job with `id`, `board_id`, `provider`, `company_name`, `external_id`, `title`, `location`, `is_remote`, `department`, `team`, `apply_url`, `description`, `posted_at`.
+      - `JobsListResponse`: Paginated response with `jobs` (list of DiscoveredJobResponse), `total_count`, `limit`, `offset`, `has_more`.
+  - `utils.py` (~450 lines): Contains utility functions:
     - `extract_jd`: Extracts structured job description data from raw HTML content using the LLM service.
     - `clean_content`: Cleans HTML content by removing script/style tags, JavaScript, and normalizing whitespace.
     - `normalize_url`: Normalizes URLs by removing tracking parameters, fragments, and normalizing casing and trailing slashes.
+    - `parse_job_board_url`: Parses job board URLs to extract provider type (ashby/lever/greenhouse) and board identifier. Only accepts canonical board roots (not deep links like `/jobs/123` or `/apply`).
+    - `verify_internal_api_key`: Validates `X-Internal-API-Key` header against `INTERNAL_API_KEY` env var for internal endpoints.
     - `infer_job_site_type`: Infers the job board type (linkedin, y-combinator, job-board, careers page) from a URL.
     - `parse_resume`: Parses a user's resume (PDF) using an LLM and updates the user's profile in the database with the extracted information. Extracts location for each experience entry.
     - `check_if_job_application_belongs_to_user`: Verifies that a job application ID belongs to a specific user.
@@ -65,9 +75,23 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       - `POST /extension/autofill/event`: Logs autofill events to `public.autofill_events` table for telemetry. Validates ownership of run_id. Returns {"status": "success"}.
       - `POST /extension/autofill/feedback`: Submits user feedback/corrections for autofill answers to `public.autofill_feedback` table. Validates ownership of run_id. Returns {"status": "success"}.
       - `POST /extension/autofill/submit`: Marks autofill run as 'submitted' in `public.autofill_runs`, updates corresponding job_application status to 'applied', logs 'application_submitted' event. Returns {"status": "success"}.
+    - `discovery.py` (~100 lines): Handles job board discovery via SERP search:
+      - `POST /discovery/run`: Searches for job board URLs using Serper.dev SERP API. Parses URLs to extract board identifiers, creates/updates `company_boards` records. Requires `X-Internal-API-Key` header authentication. Returns discovery statistics.
+    - `sync.py` (~180 lines): Handles job syncing from discovered boards:
+      - `POST /sync/run`: Fetches jobs from provider APIs (Ashby, Lever, Greenhouse) for active boards. Creates/updates `discovered_jobs` records with deduplication. Tracks failure counts (deactivates boards after 5 consecutive failures). Requires `X-Internal-API-Key` header authentication. Returns sync statistics.
+    - `jobs.py` (~100 lines): Public endpoint for browsing discovered jobs:
+      - `GET /jobs`: Returns paginated list of discovered jobs. Supports query params: `keyword` (full-text search), `provider` (filter by job board), `location` (text search), `remote` (boolean filter), `limit`, `offset`. Uses PostgreSQL tsvector for full-text search with relevance ranking. No authentication required.
   - `services/`: Service layer for external integrations and agents.
     - `llm.py` (9 lines): Initializes Google Generative AI client. Model used: `gemini-2.5-flash`.
     - `supabase.py` (32 lines): Provides a `Supabase` class with `db_connection` (psycopg2 PostgreSQL connection) and `client` (Supabase SDK for auth/storage).
+    - `http_client.py` (~100 lines): Shared aiohttp client with exponential backoff retry logic. Retries on: 429, 500, 502, 503, 504, connection errors, timeouts. No retry on: 400, 401, 403, 404. Backoff: 1s → 2s → 4s → 8s → 16s max.
+    - `serper.py` (~60 lines): Serper.dev SERP client for discovering job board URLs from Google search results. Uses `SERPER_API_KEY` env var.
+    - `job_providers/`: Job board API clients for fetching job listings.
+      - `__init__.py` (~25 lines): Provider factory that returns appropriate client based on provider type.
+      - `base.py` (~40 lines): Abstract base class defining provider interface with `fetch_jobs()` method.
+      - `ashby.py` (~80 lines): Ashby API client. Fetches from `https://api.ashbyhq.com/posting-api/job-board/{boardName}`. Returns `{ jobs: [...] }`.
+      - `lever.py` (~80 lines): Lever API client. Fetches from `https://api.lever.co/v0/postings/{site}`. Returns array directly.
+      - `greenhouse.py` (~80 lines): Greenhouse API client. Fetches from `https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true`. Returns `{ jobs: [...] }`.
     - `autofill_agent_dag.py` (~398 lines): Implements the autofill agent as a LangGraph StateGraph DAG.
 
       **DAG Flow**: `START → initialize → extract_form_fields → generate_answers → assemble_autofill_plan → END`
@@ -92,6 +116,9 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 
 ## Services
 - **Authentication**: User signup, login, and user info managed via Supabase's authentication service. Supports email/password and Google OAuth (configured via Supabase Auth providers). Extension authentication uses custom JWT tokens with one-time code exchange.
+- **Job Discovery & Ingestion**: Two-phase system for populating job listings:
+  1. **Discovery Phase**: Uses Serper.dev to search Google SERP for job board URLs (Ashby, Lever, Greenhouse). Parses URLs to extract board identifiers and stores in `company_boards` table.
+  2. **Sync Phase**: Fetches jobs from each provider's public API and stores in `discovered_jobs` table with full-text search support. Tracks failure counts and auto-deactivates boards after 5 consecutive failures.
 - **Job Ingestion**: Utilizes Google Generative AI (Gemini 2.5 Flash) to extract structured job descriptions from raw HTML content, either fetched from a URL or provided directly by the browser extension. Includes URL normalization and job site type inference.
 - **Resume Parsing**: Parses uploaded PDF resumes using PyMuPDF (fitz) for text extraction and Gemini 2.5 Flash for structured data extraction. Updates user profile with parsed resume data (skills, experience, education, certifications, projects).
 - **Autofill Agent**: LangGraph-based DAG that receives pre-extracted form fields from the browser extension (extracted using JavaScript DOMParser in the actual browser environment), converts them to internal format, enriches country fields automatically, generates contextual answers using LLM with user profile and resume data, and creates autofill plans. Supports telemetry, feedback collection, and submission tracking.
@@ -122,6 +149,11 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `POST /extension/autofill/feedback`: Submit feedback/corrections for autofill answers.
 - `POST /extension/autofill/submit`: Mark autofill run as submitted and update job application status.
 
+### Job Discovery (`/discovery`, `/sync`, `/jobs`)
+- `POST /discovery/run`: Run job board discovery via SERP search (internal, requires `X-Internal-API-Key`).
+- `POST /sync/run`: Sync jobs from discovered boards (internal, requires `X-Internal-API-Key`).
+- `GET /jobs`: List discovered jobs with search and filters (public, no auth required).
+
 ### Health Check
 - `GET /`: Health check endpoint.
 
@@ -146,6 +178,8 @@ Tables referenced in code:
 - `public.users` - User profiles and resume data (first_name, full_name, avatar_url, resume_url, resume_parse_status, open_to_relocation, resume_profile JSONB, etc.)
 - `public.job_applications` - Job postings with normalized_url and jd_dom_html
 - `public.extension_connect_codes` - One-time codes for extension pairing (code_hash, expires_at, used)
+- `public.company_boards` - Discovered job boards (provider, board_identifier, canonical_url, company_name, last_synced_at, failure_count, last_error, is_active). Unique constraint on (provider, board_identifier).
+- `public.discovered_jobs` - Jobs fetched from job boards (board_id FK, external_id, title, location, is_remote, department, team, apply_url, description, posted_at, raw_data JSONB, first_seen_at, last_seen_at, is_active, search_vector tsvector). Full-text search via `search_vector` generated column. Unique constraint on (board_id, external_id).
 - `public.autofill_runs` - Autofill execution history (dom_html_hash, plan_json, plan_summary, status)
 - `public.autofill_events` - Event logs for autofill runs (run_id, event_type, payload)
 - `public.autofill_feedback` - User corrections to autofill answers (run_id, question_signature, correction)
@@ -216,4 +250,8 @@ DB_PORT=
 # JWT/Security
 SECRET_KEY=
 ALGORITHM=
+
+# Job Discovery
+SERPER_API_KEY=           # Serper.dev API key for SERP discovery
+INTERNAL_API_KEY=         # API key for internal endpoints (/discovery, /sync)
 ```

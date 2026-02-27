@@ -308,6 +308,155 @@ def check_if_run_id_belongs_to_user(run_id: str, user_id: str, supabase: Supabas
         return False
 
 
+from fastapi import Header, HTTPException
+import os
+from dataclasses import dataclass
+from typing import Optional
+
+
+# ===== Job Board URL Parsing for Discovery =====
+
+# Regex patterns for canonical board root URLs (not deep links)
+BOARD_URL_PATTERNS = {
+    "ashby": re.compile(r"^https?://jobs\.ashbyhq\.com/([a-zA-Z0-9_-]+)/?$"),
+    "lever": re.compile(r"^https?://jobs\.lever\.co/([a-zA-Z0-9_-]+)/?$"),
+    "greenhouse": re.compile(r"^https?://boards\.greenhouse\.io/([a-zA-Z0-9_-]+)/?$"),
+}
+
+# Patterns for deep links (to reject)
+DEEP_LINK_PATTERNS = [
+    r"/jobs/",
+    r"/apply",
+    r"/application",
+    r"/job/",
+    r"/posting/",
+    r"/\d+$",  # Ends with numeric ID
+]
+
+
+@dataclass
+class ParsedBoardUrl:
+    """Result of parsing a job board URL"""
+    is_valid: bool
+    provider: Optional[str] = None
+    board_identifier: Optional[str] = None
+    canonical_url: Optional[str] = None
+    rejection_reason: Optional[str] = None
+
+
+def parse_job_board_url(url: str) -> ParsedBoardUrl:
+    """
+    Parse a URL to determine if it's a valid canonical job board root URL.
+
+    Valid:
+      - https://jobs.ashbyhq.com/{boardName}
+      - https://jobs.lever.co/{site}
+      - https://boards.greenhouse.io/{token}
+
+    Invalid (deep links):
+      - https://jobs.ashbyhq.com/company/jobs/123
+      - https://jobs.lever.co/company/12345
+      - https://boards.greenhouse.io/company/jobs/456/apply
+
+    Returns:
+        ParsedBoardUrl with validation result
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.netloc.lower()
+        path = parsed.path
+
+        # Clean URL for matching
+        clean_url = f"{parsed.scheme}://{hostname}{path}".rstrip("/")
+
+        # Check for deep link patterns (reject these)
+        for pattern in DEEP_LINK_PATTERNS:
+            if re.search(pattern, path, re.IGNORECASE):
+                return ParsedBoardUrl(
+                    is_valid=False,
+                    rejection_reason=f"Deep link detected (pattern: {pattern})"
+                )
+
+        # Try matching each provider pattern
+        for provider, pattern in BOARD_URL_PATTERNS.items():
+            match = pattern.match(clean_url)
+            if match:
+                board_identifier = match.group(1)
+
+                # Additional validation: identifier should be reasonable
+                if len(board_identifier) < 2 or len(board_identifier) > 100:
+                    return ParsedBoardUrl(
+                        is_valid=False,
+                        rejection_reason=f"Board identifier length invalid: {len(board_identifier)}"
+                    )
+
+                # Build canonical URL
+                if provider == "ashby":
+                    canonical = f"https://jobs.ashbyhq.com/{board_identifier}"
+                elif provider == "lever":
+                    canonical = f"https://jobs.lever.co/{board_identifier}"
+                elif provider == "greenhouse":
+                    canonical = f"https://boards.greenhouse.io/{board_identifier}"
+                else:
+                    canonical = clean_url
+
+                return ParsedBoardUrl(
+                    is_valid=True,
+                    provider=provider,
+                    board_identifier=board_identifier,
+                    canonical_url=canonical,
+                )
+
+        # No pattern matched
+        return ParsedBoardUrl(
+            is_valid=False,
+            rejection_reason="URL does not match any supported job board pattern"
+        )
+
+    except Exception as e:
+        return ParsedBoardUrl(
+            is_valid=False,
+            rejection_reason=f"URL parsing error: {str(e)}"
+        )
+
+
+def infer_company_name_from_identifier(board_identifier: str) -> str:
+    """
+    Infer company name from board identifier.
+    e.g., "stripe" -> "Stripe", "open-ai" -> "Open Ai"
+    """
+    return board_identifier.replace("-", " ").replace("_", " ").title()
+
+
+# ===== Internal API Key Authentication =====
+
+def verify_internal_api_key(x_internal_api_key: str = Header(None)) -> bool:
+    """
+    FastAPI dependency for internal endpoint authentication.
+    Validates X-Internal-API-Key header against INTERNAL_API_KEY env var.
+
+    Usage:
+        @router.post("/discovery/run")
+        async def run_discovery(_: bool = Depends(verify_internal_api_key)):
+            ...
+    """
+    expected_key = os.getenv("INTERNAL_API_KEY")
+
+    if not expected_key:
+        logger.error("INTERNAL_API_KEY not configured in environment variables")
+        raise HTTPException(status_code=500, detail="Internal API key not configured")
+
+    if not x_internal_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-Internal-API-Key header")
+
+    if x_internal_api_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    return True
+
+
+# ===== Existing URL utilities =====
+
 def extract_job_url_info(url: str) -> dict:
     """
     Extract job board type, base URL, and page type from a job URL.
