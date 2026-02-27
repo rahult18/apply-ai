@@ -36,7 +36,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `check_if_job_application_belongs_to_user`: Verifies that a job application ID belongs to a specific user.
     - `check_if_run_id_belongs_to_user`: Verifies that an autofill run ID belongs to a specific user.
     - `extract_job_url_info`: Extracts job board type, base URL, and page type from a job URL. Handles Lever (`/apply` suffix), Ashby (`/application` suffix), and Greenhouse (combined single page). Returns dict with `job_board`, `base_url`, `page_type`.
-  - `dag_utils.py` (296 lines): Contains DAG-related utilities for autofill agent:
+  - `dag_utils.py` (~293 lines): Contains DAG-related utilities for autofill agent:
     - **Enums**: `InputType` (text, textarea, select, radio, checkbox, date, number, email, password, file, tel, url, hidden, unknown), `AnswerAction` (autofill, suggest, skip), `RunStatus` (running, completed, failed).
     - **TypedDicts**: `FormField` (question_signature, label, input_type, required, options, selector), `FormFieldAnswer` (value, source, confidence 0.0-1.0, action), `PlanField`, `AutofillPlanJSON`, `AutofillPlanSummary`.
     - **Pydantic Models**: `LLMAnswerItem` (value, action, confidence, source), `LLMAnswersResponse` (dict of answers keyed by field signature).
@@ -45,7 +45,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `_enrich_country_fields`: Automatically enriches select fields containing "country", "nationality", or "citizenship" keywords with a standard list of 196 countries (useful when React Select components have empty options in static DOM).
     - `build_autofill_plan`: Builds an autofill plan JSON from form fields and answers. Normalizes answer data and includes confidence scores.
     - `summarize_autofill_plan`: Summarizes an autofill plan with counts of autofilled, suggested, and skipped fields.
-    - `_normalize_answer`: Ensures answer has valid action, source, confidence values clamped to 0.0-1.0. Defaults missing/invalid answers to `action: "autofill"` (not skip) to maximize field coverage.
+    - `_normalize_answer`: **Forces all actions to 'autofill'** - converts 'suggest' and 'skip' to 'autofill' to maximize field coverage. Ensures answer has valid source, confidence values clamped to 0.0-1.0. File inputs are handled separately in generate_answers_node.
   - `routes/`: API route handlers.
     - `auth.py` (118 lines): Handles user authentication:
       - `POST /auth/signup`: Registers a new user with email and password, creates Supabase auth user, inserts row into `public.users` table, and returns a session token or a message for email confirmation.
@@ -68,7 +68,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
   - `services/`: Service layer for external integrations and agents.
     - `llm.py` (9 lines): Initializes Google Generative AI client. Model used: `gemini-2.5-flash`.
     - `supabase.py` (32 lines): Provides a `Supabase` class with `db_connection` (psycopg2 PostgreSQL connection) and `client` (Supabase SDK for auth/storage).
-    - `autofill_agent_dag.py` (542 lines): Implements the autofill agent as a LangGraph StateGraph DAG.
+    - `autofill_agent_dag.py` (~398 lines): Implements the autofill agent as a LangGraph StateGraph DAG.
 
       **DAG Flow**: `START → initialize → extract_form_fields → generate_answers → assemble_autofill_plan → END`
 
@@ -78,10 +78,17 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       **Nodes**:
       - `initialize_node`: Extracts run_id and page_url from input_data, initializes empty state.
       - `extract_form_fields_node`: Converts pre-extracted fields from browser extension's JavaScript DOMParser to internal FormField format using `dag_utils.convert_js_fields_to_form_fields`. Handles field deduplication by question_signature. Logs field labels for debugging. Error handling with graceful failures.
-      - `generate_answers_node` (229 lines, most complex): Builds context objects (user_ctx: profile fields; job_ctx: job details; resume_ctx: parsed resume). Constructs structured JSON prompt for Gemini with **aggressive autofill rules** — LLM instructed to always use `action='autofill'` (skip only for file upload fields). File input fields are auto-assigned `value: "resume"` or `value: "cover_letter"` based on label matching, bypassing LLM entirely. Post-processes LLM response: normalizes text for option matching, performs fuzzy matching for select options, validates confidence scores (clamped 0.0-1.0), maps values to actual options. Missing LLM responses default to `action: "autofill"` instead of skip. Logs action counts and confidence levels.
+      - `generate_answers_node` (~250 lines, most complex): Builds context objects (user_ctx: profile fields; job_ctx: job details; resume_ctx: parsed resume). Constructs structured JSON prompt for Gemini with **mandatory autofill rules**:
+        - Prompt explicitly states: "MANDATORY: Set action='autofill' for ALL fields. Never use 'skip' or 'suggest'."
+        - Requires LLM to return exactly N answers (one per field) with `action='autofill'`
+        - For unknown answers: still uses `action='autofill'` with `value=''` and low confidence
+        - File input fields are auto-assigned `value: "resume"` (autofill) or `value: "cover_letter"` (skip) based on label matching, bypassing LLM entirely
+        - Post-processes LLM response: normalizes text for option matching, performs fuzzy matching for select options, validates confidence scores (clamped 0.0-1.0), maps values to actual options
+        - Missing LLM responses default to `action: "autofill"` with empty value
+        - Logs action counts and field signatures by action type
       - `assemble_autofill_plan_node`: Builds final AutofillPlanJSON from form_fields + answers, generates AutofillPlanSummary statistics. Persists plan to database: updates `public.autofill_runs` with plan_json, plan_summary, status, updated_at. Sets status to "completed" or "failed" based on errors.
 
-      **Key Features**: Pre-extracted fields from browser, LLM-powered intelligent answers, confidence scoring (0.0-1.0), source tracking (profile|resume|jd|llm|unknown), fuzzy option matching, graceful error handling, comprehensive logging.
+      **Key Features**: Pre-extracted fields from browser, LLM-powered intelligent answers, aggressive autofill strategy (never skips fields except cover letters), confidence scoring (0.0-1.0), source tracking (profile|resume|jd|llm|unknown), fuzzy option matching, graceful error handling, comprehensive logging.
 
 ## Services
 - **Authentication**: User signup, login, and user info managed via Supabase's authentication service. Supports email/password and Google OAuth (configured via Supabase Auth providers). Extension authentication uses custom JWT tokens with one-time code exchange.
@@ -108,7 +115,8 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `POST /extension/connect/exchange`: Exchange one-time code for an extension JWT token.
 - `GET /extension/me`: Get current user info using extension token.
 - `POST /extension/jobs/ingest`: Ingest a job application from URL or DOM HTML.
-- `POST /extension/jobs/status`: Check job application status by URL. Supports Lever/Ashby URL pattern matching (strips `/apply` or `/application` suffixes). Returns page type, application state, and job details.
+- `POST /extension/jobs/status`: Check job application status by URL. Supports Lever/Ashby URL pattern matching (strips `/apply` or `/application` suffixes). Returns page type, application state, job details, and `run_id` (for restoring "Mark as Applied" functionality).
+- `POST /extension/resume-match`: Get resume-to-job match analysis. Returns score (0-100), matched_keywords, and missing_keywords for display in extension's Resume Score tab.
 - `POST /extension/autofill/plan`: Generate autofill plan for a job application form.
 - `POST /extension/autofill/event`: Log autofill telemetry events.
 - `POST /extension/autofill/feedback`: Submit feedback/corrections for autofill answers.

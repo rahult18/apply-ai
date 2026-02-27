@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const APP_BASE_URL = "http://localhost:3000";
 const API_BASE_URL = "http://localhost:8000";
@@ -25,6 +25,9 @@ export const useExtension = () => {
   const [isLoadingMatch, setIsLoadingMatch] = useState(false);
   const [lastRunId, setLastRunId] = useState(null); // Store run_id from last autofill for marking as applied
   const [isMarkingApplied, setIsMarkingApplied] = useState(false);
+
+  // Ref to track if we just completed an action (prevents checkJobStatus from resetting state)
+  const skipNextResetRef = useRef(false);
 
   // Check connection status
   const checkConnection = useCallback(async () => {
@@ -113,9 +116,16 @@ export const useExtension = () => {
           setLastRunId(status.run_id);
         }
       } else {
-        // No job found for this URL
-        setExtractedJob(null);
-        setSessionState('idle');
+        // No job found for this URL - but don't reset if we just completed an action
+        // (extraction/autofill/applied result should be trusted over status check)
+        if (skipNextResetRef.current) {
+          skipNextResetRef.current = false; // Reset the flag
+          // Keep current state
+        } else {
+          setExtractedJob(null);
+          setAutofillStats(null);
+          setSessionState('idle');
+        }
       }
     } catch (e) {
       console.error('Job status check failed:', e);
@@ -271,6 +281,8 @@ export const useExtension = () => {
             title: msg.job_title,
             company: msg.company
           });
+          // Mark that we just completed an action (prevents checkJobStatus from resetting state)
+          skipNextResetRef.current = true;
           // Refresh job status to get updated state
           checkJobStatus();
         } else {
@@ -312,6 +324,8 @@ export const useExtension = () => {
         if (msg.ok) {
           setSessionState('applied');
           setStatusMessage('Application marked as applied!');
+          // Mark that we just completed an action (prevents checkJobStatus from resetting state)
+          skipNextResetRef.current = true;
           // Refresh job status
           checkJobStatus();
         } else {

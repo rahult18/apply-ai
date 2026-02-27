@@ -19,15 +19,19 @@ export const useStepperState = (
   sessionState,
   jobStatus,
   isCheckingStatus,
-  statusMessage
+  statusMessage,
+  extractedJob
 ) => {
   return useMemo(() => {
+    // Consider job found if either jobStatus says so OR we have extractedJob from recent extraction
+    const hasJob = jobStatus?.found || (extractedJob?.title && extractedJob?.company);
+
     // Determine current step index
     let currentStepIndex = 0;
 
     if (connectionStatus !== 'connected') {
       currentStepIndex = 0; // Connect
-    } else if (!jobStatus?.found) {
+    } else if (!hasJob) {
       currentStepIndex = 1; // Extract
     } else if (sessionState === 'applied') {
       currentStepIndex = 3; // Applied
@@ -74,10 +78,9 @@ export const useStepperState = (
 
       const isWorking = sessionState === 'extracting' || sessionState === 'autofilling';
       const pageType = jobStatus?.page_type;
-      const jobFound = jobStatus?.found;
 
       // On extract step
-      if (!jobFound && pageType !== 'application') {
+      if (!hasJob && pageType !== 'application') {
         return {
           label: sessionState === 'extracting' ? 'Extracting...' : 'Extract Job',
           handler: 'extractJob',
@@ -88,7 +91,7 @@ export const useStepperState = (
       }
 
       // On application page without job extracted
-      if (!jobFound && pageType === 'application') {
+      if (!hasJob && pageType === 'application') {
         return {
           label: 'Extract Job First',
           handler: null,
@@ -132,9 +135,9 @@ export const useStepperState = (
       pillStatus,
       pillText,
       primaryAction,
-      showJobCard: currentStepIndex >= 2 && jobStatus?.found,
+      showJobCard: currentStepIndex >= 2 && hasJob,
       showStatusMessage,
       messageType
     };
-  }, [connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage]);
+  }, [connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage, extractedJob]);
 };

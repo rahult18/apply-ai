@@ -178,15 +178,18 @@ class DAG():
             ]
 
             prompt_obj = {
-                "task": "Generate answers for job application form fields.",
-                "rules": [
-                    "Return JSON only, matching the provided JSON schema.",
-                    "Use user_ctx for identity/contact/demographics when applicable.",
-                    "For select/radio/checkbox: when options are provided, return one exact option string from the list (no new values).",
-                    "For select/radio fields where no option is a perfect match, pick the closest matching option and set action='autofill' with lower confidence.",
-                    "ALWAYS set action='autofill' for every field. Only use action='skip' for file upload input fields.",
-                    "For text/textarea fields, always provide your best answer even if confidence is low. Use data from user_ctx, resume_ctx, or job_ctx.",
-                    "Do not invent personally sensitive info (e.g. SSN, bank details). For missing demographic/identity info, set action='autofill' with value='' and low confidence.",
+                "task": f"Generate answers for ALL {len(fields_spec)} job application form fields. You MUST provide an answer for EVERY field.",
+                "critical_rules": [
+                    f"MANDATORY: Return exactly {len(fields_spec)} answers - one for each field in form_fields. No field can be omitted.",
+                    "MANDATORY: Set action='autofill' for ALL fields. Never use 'skip' or 'suggest'.",
+                    "If you don't know an answer, still use action='autofill' with value='' and confidence between 0.0-0.3.",
+                ],
+                "value_rules": [
+                    "For select/radio/checkbox with options: return EXACTLY one option string from the provided list (case-sensitive match).",
+                    "For select/radio with no perfect match: pick the closest option, set action='autofill' with lower confidence.",
+                    "For text/textarea: provide your best answer using user_ctx, resume_ctx, or job_ctx data.",
+                    "For missing demographic/EEO info: use value='' with confidence=0.1 (still action='autofill').",
+                    "Never invent sensitive data (SSN, bank details). Use empty string if truly unknown.",
                 ],
                 "context": {
                     "page_url": input_data.get("page_url"),
@@ -198,13 +201,14 @@ class DAG():
                 "output_format": {
                     "answers": {
                         "<question_signature>": {
-                            "value": "string|number|boolean|null",
-                            "action": "autofill|suggest|skip",
-                            "confidence": 0.0,
+                            "value": "string|number|boolean|''",
+                            "action": "autofill",
+                            "confidence": "0.0-1.0",
                             "source": "profile|resume|jd|llm|unknown",
                         }
                     }
                 },
+                "final_reminder": f"You MUST return exactly {len(fields_spec)} answer objects. Every field gets action='autofill'.",
             }
 
             prompt = json.dumps(prompt_obj, ensure_ascii=False)

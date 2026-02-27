@@ -83,6 +83,11 @@ This folder contains the browser extension for the Application Tracker project. 
      - Sends progress messages: `APPLYAI_AUTOFILL_PROGRESS` (stages: starting, extracting_dom, extracting_fields, planning, autofilling)
      - Sends result: `APPLYAI_AUTOFILL_RESULT` (includes ok, run_id, plan_summary, filled, skipped, errors)
 
+  5. `APPLYAI_MARK_APPLIED`: Mark application as applied
+     - Validates token and run_id from message
+     - POSTs to `/extension/autofill/submit` with run_id
+     - Sends result: `APPLYAI_MARK_APPLIED_RESULT` (includes ok, error)
+
 - `content.js`: Content script bridge (~18 lines)
   - Listens for `APPLYAI_EXTENSION_CONNECT` messages from web page via `window.addEventListener("message")`
   - Only accepts messages from same origin (security check)
@@ -93,15 +98,20 @@ This folder contains the browser extension for the Application Tracker project. 
 - `popup/`: Extension popup UI (React + Vite + Tailwind)
   - `index.html` (13 lines): Entry point that loads the built popup.js from Vite
   - `src/main.jsx` (11 lines): React entry point that renders Popup component into #root
-  - `src/Popup.jsx` (~165 lines): Main popup component with stepper-driven architecture:
+  - `src/Popup.jsx` (~220 lines): Main popup component with stepper-driven architecture:
     - Uses `useExtension` hook for state/actions and `useStepperState` hook for UI derivation
     - Header card: Logo (sky gradient badge with BoltIcon), "ApplyAI" title, subtitle, StatusPill
     - **ProgressStepper**: 4-step visual progress bar (Connect → Extract → Autofill → Applied)
+    - **Tabbed interface** (when connected + job extracted): Autofill tab and Resume Score tab
+      - Tabs component switches between autofill workflow and resume match display
+      - Resume Score tab lazy-loads match data via `fetchResumeMatch()` when selected
     - Main content card with conditional sections:
       - StatusMessage for operation progress/errors
       - JobCard for extracted job info
       - Autofill stats (green success box: "Filled X fields, skipped Y")
+      - **"Mark as Applied" button**: Appears after autofill completion, calls `markAsApplied()`
       - Applied badge (green checkmark pill)
+      - **ResumeMatchCard**: Displays resume match score, matched/missing keywords (in Resume Score tab)
     - **Single dynamic primary action button** driven by `useStepperState`:
       - Disconnected → "Connect to ApplyAI"
       - No job + JD page → "Extract Job"
@@ -138,18 +148,28 @@ This folder contains the browser extension for the Application Tracker project. 
       - BriefcaseIcon in sky gradient badge
       - Job title (semibold, truncated) and company name (gray, truncated)
       - Styling: White background, border, rounded-xl, shadow-sm
+    - `Tabs.jsx`: Tab navigation component for switching between Autofill and Resume Score views
+      - Accepts tabs array, activeTab, and onTabChange callback
+      - Renders horizontal tab bar with active state styling
+    - `ResumeMatchCard.jsx`: Displays resume-to-job match analysis
+      - Shows match score (percentage), matched keywords (green badges), missing keywords (red badges)
+      - Loading state with skeleton UI
+      - Helps users understand how well their resume matches the job requirements
   - `src/hooks/`:
-    - `useExtension.js` (~278 lines): Custom hook managing extension state and messaging
-      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats, **jobStatus**, **isCheckingStatus**
+    - `useExtension.js` (~376 lines): Custom hook managing extension state and messaging
+      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats, **jobStatus**, **isCheckingStatus**, **resumeMatch**, **isLoadingMatch**, **lastRunId**, **isMarkingApplied**
       - SessionState values: idle, extracting, extracted, autofilling, autofilled, **applied**, error
-      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields(), **checkJobStatus()**
+      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields(), **checkJobStatus()**, **fetchResumeMatch()**, **markAsApplied()**
       - **generateAutofill()**: Sends `APPLYAI_AUTOFILL_PLAN` message with `job_application_id` from `jobStatus` state (not relying on background script's `lastIngest` storage)
-      - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Auto-refreshes after JD extraction.
-      - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT
+      - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Restores `lastRunId` from status response. Uses `skipNextResetRef` to prevent state reset after completing actions. Auto-refreshes after JD extraction.
+      - **fetchResumeMatch()**: Calls `POST /extension/resume-match` with job_application_id. Returns score, matched_keywords, missing_keywords for display in ResumeMatchCard.
+      - **markAsApplied()**: Sends `APPLYAI_MARK_APPLIED` message with `lastRunId` (stored from autofill result). Updates sessionState to 'applied' on success.
+      - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT, **APPLYAI_MARK_APPLIED_RESULT**
       - Initialization: Checks connection on mount, then checks job status if connected
       - API URLs: APP_BASE_URL (localhost:3000), API_BASE_URL (localhost:8000)
-    - `useStepperState.js` (~140 lines): Custom hook deriving all UI state from extension state
-      - Input: connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage
+    - `useStepperState.js` (~144 lines): Custom hook deriving all UI state from extension state
+      - Input: connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage, **extractedJob**
+      - **hasJob logic**: Considers job found if either `jobStatus?.found` OR `extractedJob` has title+company (handles race condition after extraction)
       - **Step computation**: Maps current state to 4-step progress (connect=0, extract=1, autofill=2, applied=3). Each step gets state: completed, active, or pending.
       - **Pill status/text**: Derives StatusPill props (disconnected, working, error, connected) with dynamic text
       - **Primary action**: Returns { label, handler, icon, loading, disabled, hint } based on:
@@ -275,7 +295,11 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - Accepts `url` (current tab URL)
   - Detects job board type (Lever, Ashby, Greenhouse) and page type (jd, application, combined)
   - For Lever/Ashby: Strips `/apply` or `/application` suffix to match base JD URL
-  - Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`
+  - Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`, `run_id` (for restoring "Mark as Applied" functionality)
+- `POST /extension/resume-match`: Get resume-to-job match analysis
+  - Accepts `job_application_id`
+  - Returns `score` (0-100), `matched_keywords` (array), `missing_keywords` (array)
+  - Used by Resume Score tab to show how well user's resume matches the job
 - `POST /extension/autofill/plan`: Generate autofill plan for application form
   - Accepts `extracted_fields` (array of structured field objects extracted by extension)
   - **Extension now provides dropdown options**: React Select options are pre-extracted by opening dropdowns programmatically

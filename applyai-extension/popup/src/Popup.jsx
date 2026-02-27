@@ -54,7 +54,7 @@ const Popup = () => {
     showJobCard,
     showStatusMessage,
     messageType
-  } = useStepperState(connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage);
+  } = useStepperState(connectionStatus, sessionState, jobStatus, isCheckingStatus, statusMessage, extractedJob);
 
   // Map handler names to actual functions
   const handlers = {

@@ -87,17 +87,7 @@ class AutofillPlanSummary(TypedDict):
 
 class LLMAnswerItem(BaseModel):
     value: Any = None
-    action: Literal["autofill", "suggest", "skip"] = "skip"
-    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
-    source: Optional[Literal["profile", "resume", "jd", "llm", "unknown"]] = "llm"
-
-
-class LLMAnswersResponse(BaseModel):
-    answers: Dict[str, LLMAnswerItem]
-
-class LLMAnswerItem(BaseModel):
-    value: Any = None
-    action: Literal["autofill", "suggest", "skip"] = "skip"
+    action: Literal["autofill", "suggest", "skip"] = "autofill"  # Default to autofill, never skip
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     source: Optional[Literal["profile", "resume", "jd", "llm", "unknown"]] = "llm"
 
@@ -274,6 +264,10 @@ def _enrich_country_fields(fields: List[FormField]) -> List[FormField]:
 
 
 def _normalize_answer(answer: Optional[FormFieldAnswer]) -> FormFieldAnswer:
+    """
+    Normalize an answer to ensure it has valid fields.
+    Converts 'suggest' and 'skip' to 'autofill' to maximize field coverage.
+    """
     if not answer:
         return {
             "value": None,
@@ -282,9 +276,11 @@ def _normalize_answer(answer: Optional[FormFieldAnswer]) -> FormFieldAnswer:
             "action": "autofill",
         }
     action = answer.get("action")
+    # Force all actions to autofill - we never want to skip fields
+    # (file inputs are handled separately in generate_answers_node)
     if action not in {"autofill", "suggest", "skip"}:
         action = "autofill"
-    if action == "suggest":
+    if action in {"suggest", "skip"}:
         action = "autofill"
     conf = float(answer.get("confidence") or 0.0)
     conf = max(0.0, min(1.0, conf))
