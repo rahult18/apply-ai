@@ -27,7 +27,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `AutofillAgentInput`: Comprehensive input model for the autofill agent DAG, containing run metadata, application page details, job details, and user details (profile + resume).
     - `AutofillAgentOutput`: Output model from the autofill agent with status, plan_json, and plan_summary.
     - `JobStatusRequest`: Request model for job status lookup with `url` field.
-    - `JobStatusResponse`: Response model containing `found`, `page_type` (jd|application|combined|unknown), `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`.
+    - `JobStatusResponse`: Response model containing `found`, `page_type` (jd|application|combined|unknown), `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`, `run_id` (page-specific), `current_page_autofilled` (bool), `plan_summary` (dict with autofill stats).
     - **Job Discovery Models**:
       - `DiscoveryRunRequest`: Request model for discovery run with `query`, `providers` (list of JobBoardProvider), `max_results`.
       - `DiscoveryRunResponse`: Response with `total_urls_found`, `valid_boards_parsed`, `new_boards_created`, `existing_boards_updated`.
@@ -69,7 +69,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       - `create`, `mark_as_applied`, `belongs_to_user`
     - `autofill.py` (~172 lines): `AutofillRepository` class for autofill_runs, autofill_events, autofill_feedback, extension_connect_codes:
       - Connect codes: `create_connect_code`, `get_valid_connect_code`, `mark_connect_code_used`
-      - Runs: `get_completed_plan`, `get_latest_completed_run_id`, `create_run`, `run_belongs_to_user`, `mark_run_submitted`, `mark_job_as_applied_from_run`
+      - Runs: `get_completed_plan`, `get_latest_completed_run_id`, `get_completed_run_for_page` (page-specific run with plan_summary), `create_run`, `run_belongs_to_user`, `mark_run_submitted`, `mark_job_as_applied_from_run`
       - Events: `create_event`, `get_events_for_job_application`
       - Feedback: `create_feedback`
   - `routes/`: API route handlers. Routes use repository classes for CRUD operations; complex queries (discovery, sync, jobs) use raw SQL.
@@ -83,10 +83,10 @@ This folder contains the FastAPI backend for the Application Tracker project. It
       - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload to `user-documents` bucket (path: `resumes/{user_id}/{filename}`). Constructs dynamic UPDATE query with only provided fields. Supports `open_to_relocation` (boolean) and `resume_profile` (JSON string) fields for editable resume data. Triggers background task to parse resume using LLM. Sets resume_parse_status to "In progress" on update. Rollback: deletes uploaded file if DB update fails.
     - `extension.py` (~550 lines): Handles authentication, connection, and autofill functionality for the browser extension. Uses `UserRepository`, `JobApplicationRepository`, and `AutofillRepository`.
       - `POST /extension/connect/start`: Generates a one-time code (32 char urlsafe) for the authenticated user to connect the browser extension. Stores SHA256 hash in `public.extension_connect_codes` with 10-minute expiration. Returns plaintext code.
-      - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token (180 min expiry) with claims: sub (user_id), exp, iss (applyai-api), aud (applyai-extension), install_id. Marks code as used.
+      - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token (7 day expiry) with claims: sub (user_id), exp, iss (applyai-api), aud (applyai-extension), install_id. Marks code as used.
       - `GET /extension/me`: Retrieves user information (email, id, full_name) using the extension's JWT token. Decodes JWT with audience validation.
       - `POST /extension/jobs/ingest`: Ingests a job application. Normalizes URL to prevent duplicates, checks if job already exists (returns cached data if so). If new: fetches content from URL (if no DOM provided) or uses provided DOM, extracts JD using LLM, creates `public.job_applications` record. Returns job_application_id, url, job_title, company.
-      - `POST /extension/jobs/status`: Checks job application status by URL. Uses `extract_job_url_info()` to detect job board type (Lever, Ashby, Greenhouse) and page type (jd, application, combined). Strips `/apply` or `/application` suffixes for Lever/Ashby to match base JD URL. Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`. Enables smart button display in extension popup based on current page context.
+      - `POST /extension/jobs/status`: Checks job application status by URL. Uses `extract_job_url_info()` to detect job board type (Lever, Ashby, Greenhouse) and page type (jd, application, combined). Strips `/apply` or `/application` suffixes for Lever/Ashby to match base JD URL. Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`, `run_id` (page-specific), `current_page_autofilled` (bool), `plan_summary` (for restoring autofill stats). Enables smart button display and state persistence in extension popup.
       - `POST /extension/autofill/plan`: Generates an autofill plan for a job application form. Validates ownership of job_application_id. Generates signed URL for user's resume from Supabase storage. Checks for cached completed plan by `job_application_id + page_url` (returns existing if found, ignores DOM hash changes). If new: creates `public.autofill_runs` record with status='running', assembles AutofillAgentInput with JD and user data, invokes DAG agent. File input fields are auto-assigned `value: "resume"` (bypassing LLM). Returns run_id, status, plan_json, plan_summary, resume_url.
       - `POST /extension/autofill/event`: Logs autofill events to `public.autofill_events` table for telemetry. Validates ownership of run_id. Returns {"status": "success"}.
       - `POST /extension/autofill/feedback`: Submits user feedback/corrections for autofill answers to `public.autofill_feedback` table. Validates ownership of run_id. Returns {"status": "success"}.
@@ -158,7 +158,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
 - `POST /extension/connect/exchange`: Exchange one-time code for an extension JWT token.
 - `GET /extension/me`: Get current user info using extension token.
 - `POST /extension/jobs/ingest`: Ingest a job application from URL or DOM HTML.
-- `POST /extension/jobs/status`: Check job application status by URL. Supports Lever/Ashby URL pattern matching (strips `/apply` or `/application` suffixes). Returns page type, application state, job details, and `run_id` (for restoring "Mark as Applied" functionality).
+- `POST /extension/jobs/status`: Check job application status by URL. Supports Lever/Ashby URL pattern matching (strips `/apply` or `/application` suffixes). Returns page type, application state, job details, `run_id` (page-specific), `current_page_autofilled`, and `plan_summary` (for restoring autofill stats and "Mark as Applied" functionality).
 - `POST /extension/resume-match`: Get resume-to-job match analysis. Returns score (0-100), matched_keywords, and missing_keywords for display in extension's Resume Score tab.
 - `POST /extension/autofill/plan`: Generate autofill plan for a job application form.
 - `POST /extension/autofill/event`: Log autofill telemetry events.

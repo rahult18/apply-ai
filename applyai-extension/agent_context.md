@@ -161,7 +161,7 @@ This folder contains the browser extension for the Application Tracker project. 
       - SessionState values: idle, extracting, extracted, autofilling, autofilled, **applied**, error
       - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields(), **checkJobStatus()**, **fetchResumeMatch()**, **markAsApplied()**
       - **generateAutofill()**: Sends `APPLYAI_AUTOFILL_PLAN` message with `job_application_id` from `jobStatus` state (not relying on background script's `lastIngest` storage)
-      - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Restores `lastRunId` from status response. Uses `skipNextResetRef` to prevent state reset after completing actions. Auto-refreshes after JD extraction.
+      - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Restores `lastRunId` from status response. **Restores `autofillStats` from `plan_summary`** (page-specific). Uses `skipNextResetRef` to prevent state reset after completing actions. Auto-refreshes after JD extraction.
       - **fetchResumeMatch()**: Calls `POST /extension/resume-match` with job_application_id. Returns score, matched_keywords, missing_keywords for display in ResumeMatchCard.
       - **markAsApplied()**: Sends `APPLYAI_MARK_APPLIED` message with `lastRunId` (stored from autofill result). Updates sessionState to 'applied' on success.
       - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT, **APPLYAI_MARK_APPLIED_RESULT**
@@ -176,7 +176,7 @@ This folder contains the browser extension for the Application Tracker project. 
         - Not connected → "Connect to ApplyAI" (handler: connect)
         - No job + non-application page → "Extract Job" (handler: extractJob)
         - No job + application page → "Extract Job First" (disabled, with hint)
-        - Job found → "Generate Autofill" / "Autofill Again" (handler: generateAutofill)
+        - Job found → "Generate Autofill" / "Autofill Again" (uses `current_page_autofilled` for page-specific label)
       - **Visibility flags**: showJobCard, showStatusMessage, messageType
       - All values memoized via `useMemo` on input dependencies
 
@@ -295,7 +295,7 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - Accepts `url` (current tab URL)
   - Detects job board type (Lever, Ashby, Greenhouse) and page type (jd, application, combined)
   - For Lever/Ashby: Strips `/apply` or `/application` suffix to match base JD URL
-  - Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`, `run_id` (for restoring "Mark as Applied" functionality)
+  - Returns `found`, `page_type`, `state` (jd_extracted|autofill_generated|applied), `job_application_id`, `job_title`, `company`, `run_id` (page-specific, for restoring "Mark as Applied" functionality), `current_page_autofilled` (bool), `plan_summary` (for restoring autofill stats)
 - `POST /extension/resume-match`: Get resume-to-job match analysis
   - Accepts `job_application_id`
   - Returns `score` (0-100), `matched_keywords` (array), `missing_keywords` (array)
