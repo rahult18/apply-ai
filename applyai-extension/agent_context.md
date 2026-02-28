@@ -1,6 +1,6 @@
 # Agent Context: applyai-extension
 
-This folder contains the browser extension for the Application Tracker project. It includes the following files and directories:
+This folder contains the browser extension for the ApplyAI project. It includes the following files and directories:
 
 ## Structure
 - `manifest.json`: The manifest file for the browser extension. It defines essential metadata like the extension's name ("ApplyAI"), version (0.1.0), description, and permissions. It declares:
@@ -181,7 +181,7 @@ This folder contains the browser extension for the Application Tracker project. 
       - All values memoized via `useMemo` on input dependencies
 
 ## Purpose
-This folder provides the browser extension for the Application Tracker project. The extension enables users to:
+This folder provides the browser extension for the ApplyAI project. The extension enables users to:
 1. **Connect** their browser to their ApplyAI account via secure one-time code authentication
 2. **Extract** job descriptions from job posting pages and save them to the tracker
 3. **Autofill** job application forms using AI-generated plans based on user profile and saved job data
