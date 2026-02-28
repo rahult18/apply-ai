@@ -56,16 +56,32 @@ This folder contains the FastAPI backend for the Application Tracker project. It
     - `build_autofill_plan`: Builds an autofill plan JSON from form fields and answers. Normalizes answer data and includes confidence scores.
     - `summarize_autofill_plan`: Summarizes an autofill plan with counts of autofilled, suggested, and skipped fields.
     - `_normalize_answer`: **Forces all actions to 'autofill'** - converts 'suggest' and 'skip' to 'autofill' to maximize field coverage. Ensures answer has valid source, confidence values clamped to 0.0-1.0. File inputs are handled separately in generate_answers_node.
-  - `routes/`: API route handlers.
-    - `auth.py` (118 lines): Handles user authentication:
+  - `repositories/`: Repository layer for organized database operations.
+    - `__init__.py`: Package exports for repository classes and utilities.
+    - `base.py` (~75 lines): Core utilities:
+      - `get_cursor(connection)`: Context manager yielding a `RealDictCursor` for automatic dict conversion (eliminates manual tuple-to-dict conversions).
+      - `build_update_query(table, updates, where, extra_sets)`: Builds dynamic UPDATE queries from dicts, skipping None values. Returns `(query_string, params_list)`.
+    - `users.py` (~109 lines): `UserRepository` class for user operations:
+      - `get_by_id`, `get_basic_info`, `get_email_from_auth`, `get_resume_path`, `get_resume_profile`, `get_for_autofill`
+      - `create`, `update`, `update_resume_profile`
+    - `job_applications.py` (~114 lines): `JobApplicationRepository` class:
+      - `get_all_for_user`, `get_by_normalized_url`, `get_status_by_normalized_url`, `get_for_autofill`, `get_keywords_and_skills`
+      - `create`, `mark_as_applied`, `belongs_to_user`
+    - `autofill.py` (~172 lines): `AutofillRepository` class for autofill_runs, autofill_events, autofill_feedback, extension_connect_codes:
+      - Connect codes: `create_connect_code`, `get_valid_connect_code`, `mark_connect_code_used`
+      - Runs: `get_completed_plan`, `get_latest_completed_run_id`, `create_run`, `run_belongs_to_user`, `mark_run_submitted`, `mark_job_as_applied_from_run`
+      - Events: `create_event`, `get_events_for_job_application`
+      - Feedback: `create_feedback`
+  - `routes/`: API route handlers. Routes use repository classes for CRUD operations; complex queries (discovery, sync, jobs) use raw SQL.
+    - `auth.py` (~118 lines): Handles user authentication. Uses `UserRepository`.
       - `POST /auth/signup`: Registers a new user with email and password, creates Supabase auth user, inserts row into `public.users` table, and returns a session token or a message for email confirmation.
       - `POST /auth/login`: Authenticates a user with email and password, returns access_token and user info (email, id).
       - `GET /auth/me`: Retrieves current user information using a Bearer token. Fetches from `auth.users` and `public.users` tables, returns email, id, first_name, full_name, avatar_url.
-    - `db.py` (311 lines): Handles database interactions related to user profiles and job applications:
+    - `db.py` (~280 lines): Handles database interactions related to user profiles and job applications. Uses `UserRepository` and `JobApplicationRepository`.
       - `GET /db/get-profile`: Retrieves the user's profile information from the `users` table, including a signed URL (1 hour expiry) for their resume if available in Supabase storage. Handles multiple signed URL response formats from Supabase SDK.
       - `GET /db/get-all-applications`: Fetches all job applications for the current user from the `job_applications` table ordered by created_at DESC. Converts tuples to dictionaries for JSON response.
       - `POST /db/update-profile`: Updates the user's profile information in the `users` table. Accepts multipart form data including optional resume file upload to `user-documents` bucket (path: `resumes/{user_id}/{filename}`). Constructs dynamic UPDATE query with only provided fields. Supports `open_to_relocation` (boolean) and `resume_profile` (JSON string) fields for editable resume data. Triggers background task to parse resume using LLM. Sets resume_parse_status to "In progress" on update. Rollback: deletes uploaded file if DB update fails.
-    - `extension.py` (~580 lines): Handles authentication, connection, and autofill functionality for the browser extension:
+    - `extension.py` (~550 lines): Handles authentication, connection, and autofill functionality for the browser extension. Uses `UserRepository`, `JobApplicationRepository`, and `AutofillRepository`.
       - `POST /extension/connect/start`: Generates a one-time code (32 char urlsafe) for the authenticated user to connect the browser extension. Stores SHA256 hash in `public.extension_connect_codes` with 10-minute expiration. Returns plaintext code.
       - `POST /extension/connect/exchange`: Exchanges a one-time code and install ID for a JWT token (180 min expiry) with claims: sub (user_id), exp, iss (applyai-api), aud (applyai-extension), install_id. Marks code as used.
       - `GET /extension/me`: Retrieves user information (email, id, full_name) using the extension's JWT token. Decodes JWT with audience validation.
@@ -167,7 +183,7 @@ This folder contains the FastAPI backend for the Application Tracker project. It
   - Custom JWT tokens for browser extension (via one-time code exchange at `POST /extension/connect/exchange` and `GET /extension/me`)
 - Google OAuth is handled by Supabase Auth on the frontend; the backend receives the same Supabase JWT tokens regardless of auth method.
 - The autofill agent uses LangGraph for DAG execution and Gemini 2.5 Flash for LLM-powered form field answer generation.
-- Database operations use direct `psycopg2` connections for better control and transaction management.
+- Database operations use direct `psycopg2` connections for better control and transaction management. CRUD operations are organized via the repository layer (`app/repositories/`), while complex queries (discovery, sync, full-text search) remain as raw SQL in route handlers.
 - Resume parsing and autofill plan generation are resource-intensive operations that use LLM API calls.
 - The system supports multiple job board types: LinkedIn, Y Combinator, job boards (Greenhouse, Ashby, Lever), and generic careers pages.
 

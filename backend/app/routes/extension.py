@@ -3,6 +3,7 @@ from app.models import ExchangeRequestBody, JobsIngestRequestBody, AutofillPlanR
 from app.services.supabase import Supabase
 from app.services.llm import LLM
 from app.services.autofill_agent_dag import DAG
+from app.repositories import UserRepository, JobApplicationRepository, AutofillRepository
 import logging
 import secrets
 import hashlib
@@ -12,9 +13,8 @@ import dotenv
 import os
 import json
 from jose import JWTError, jwt
-from app.utils import clean_content, extract_jd, normalize_url, infer_job_site_type, check_if_job_application_belongs_to_user, check_if_run_id_belongs_to_user, extract_job_url_info
+from app.utils import clean_content, extract_jd, normalize_url, infer_job_site_type, extract_job_url_info
 import aiohttp
-import uuid
 
 # Loading the env variables from backend directory
 BASE_DIR = Path(__file__).parent.parent
@@ -28,6 +28,10 @@ llm = LLM()
 supabase = Supabase()
 # Initialize Autofill Agent DAG
 dag = DAG()
+# Initialize repositories
+user_repo = UserRepository(supabase.db_connection)
+job_app_repo = JobApplicationRepository(supabase.db_connection)
+autofill_repo = AutofillRepository(supabase.db_connection)
 
 router = APIRouter()
 
@@ -47,17 +51,11 @@ def get_one_time_code_for_extension(authorization: str = Header(None)):
 
         one_time_code = secrets.token_urlsafe(32)
         one_time_code_hash = hashlib.sha256(one_time_code.encode('utf-8')).hexdigest()
-        created_at = datetime.now(timezone.utc)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
-        # Store the hashed one-time code in the database with an expiration time
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("INSERT INTO public.extension_connect_codes (user_id, code_hash, expires_at, created_at) VALUES(%s, %s, %s, %s)", (user_response.user.id, one_time_code_hash, expires_at, created_at))
-            supabase.db_connection.commit()
+        autofill_repo.create_connect_code(user_response.user.id, one_time_code_hash, expires_at)
 
-        return {
-            "one_time_code": one_time_code
-        }
+        return {"one_time_code": one_time_code}
 
     except HTTPException:
         raise
@@ -72,35 +70,29 @@ def exchange_one_time_code_for_token(body: ExchangeRequestBody):
         one_time_code_hash = hashlib.sha256(body.one_time_code.encode('utf-8')).hexdigest()
 
         # Verify the one-time code and get user_id
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("SELECT id, user_id FROM public.extension_connect_codes WHERE code_hash=%s AND expires_at > NOW() AND used_at IS NULL", (one_time_code_hash,))
-            code_record = cursor.fetchone()
+        code_record = autofill_repo.get_valid_connect_code(one_time_code_hash)
+        if code_record is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired one-time code")
 
-            if code_record is None:
-                raise HTTPException(status_code=401, detail="Invalid or expired one-time code")
-            
-            code_id = code_record[0]
-            user_id = code_record[1]
+        code_id = code_record["id"]
+        user_id = code_record["user_id"]
 
-            # Marking the code as used
-            cursor.execute("UPDATE public.extension_connect_codes SET used_at=NOW() WHERE id=%s", (code_id,))
-            supabase.db_connection.commit()
-            
-            data = {
-                'sub': user_id,
-                'exp': datetime.utcnow() + timedelta(minutes=180),
-                'iss': 'applyai-api',
-                'aud': 'applyai-extension',
-                'install_id': body.install_id
-            }
-            secret_key = os.getenv("SECRET_KEY")
-            algorithm = os.getenv("ALGORITHM")
-            token = jwt.encode(data, secret_key, algorithm=algorithm)
+        # Mark the code as used
+        autofill_repo.mark_connect_code_used(code_id)
 
-        # Return the user's access token
-        return {
-            "token": token
+        # Generate JWT token
+        data = {
+            'sub': user_id,
+            'exp': datetime.utcnow() + timedelta(minutes=180),
+            'iss': 'applyai-api',
+            'aud': 'applyai-extension',
+            'install_id': body.install_id
         }
+        secret_key = os.getenv("SECRET_KEY")
+        algorithm = os.getenv("ALGORITHM")
+        token = jwt.encode(data, secret_key, algorithm=algorithm)
+
+        return {"token": token}
 
     except HTTPException:
         raise
@@ -128,22 +120,14 @@ def fetch_user_using_extension_token(authorization: str = Header(None)):
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("SELECT email FROM auth.users WHERE id=%s", (user_id,))
-            auth_row = cursor.fetchone()
-            if not auth_row:
-                raise HTTPException(status_code=401, detail="User not found")
-            email = auth_row[0]
+        email = user_repo.get_email_from_auth(user_id)
+        if not email:
+            raise HTTPException(status_code=401, detail="User not found")
 
-            cursor.execute("SELECT full_name FROM public.users WHERE id=%s", (user_id,))
-            user_row = cursor.fetchone()
-            full_name = user_row[0] if user_row else None
+        user_info = user_repo.get_basic_info(user_id)
+        full_name = user_info.get("full_name") if user_info else None
 
-        return {
-            "email": email,
-            "id": user_id,
-            "full_name": full_name
-        }
+        return {"email": email, "id": user_id, "full_name": full_name}
 
     except HTTPException:
         raise
@@ -176,27 +160,15 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
 
         # Check if job application already exists for this user and normalized URL
         # Do this BEFORE the expensive LLM extraction call
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT id, job_title, company, url FROM job_applications WHERE user_id = %s AND normalized_url = %s LIMIT 1",
-                (user_id, normalized_url)
-            )
-            existing_job = cursor.fetchone()
-
-            if existing_job:
-                # Job application already exists - return existing data without LLM call
-                job_application_id = existing_job[0]
-                job_title = existing_job[1]
-                company = existing_job[2]
-                url = existing_job[3]
-                logger.info(f"Job application already exists with id={job_application_id}. Returning existing data.")
-
-                return {
-                    "job_application_id": job_application_id,
-                    "url": url,
-                    "job_title": job_title,
-                    "company": company
-                }
+        existing_job = job_app_repo.get_by_normalized_url(user_id, normalized_url)
+        if existing_job:
+            logger.info(f"Job application already exists with id={existing_job['id']}. Returning existing data.")
+            return {
+                "job_application_id": existing_job["id"],
+                "url": existing_job["url"],
+                "job_title": existing_job["job_title"],
+                "company": existing_job["company"],
+            }
 
         # Job doesn't exist - proceed with extraction
         if body.dom_html:
@@ -223,14 +195,24 @@ async def ingest_job_via_extension(body: JobsIngestRequestBody, authorization: s
         job_site_type = infer_job_site_type(body.job_link)
 
         # Create new job application
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO job_applications (user_id, job_title, company, job_posted, job_description, url, normalized_url, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, job_site_type, open_to_visa_sponsorship, jd_dom_html) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (user_id, jd.job_title, jd.company, jd.job_posted, jd.job_description, body.job_link, normalized_url, jd.required_skills, jd.preferred_skills, jd.education_requirements, jd.experience_requirements, jd.keywords, job_site_type, jd.open_to_visa_sponsorship, jd_dom_html)
-            )
-            job_application_id = cursor.fetchone()[0]
-            supabase.db_connection.commit()
-            logger.info(f"Successfully created new job application in DB!")
+        job_application_id = job_app_repo.create(
+            user_id=user_id,
+            job_title=jd.job_title,
+            company=jd.company,
+            url=body.job_link,
+            normalized_url=normalized_url,
+            jd_dom_html=jd_dom_html,
+            job_posted=jd.job_posted,
+            job_description=jd.job_description,
+            required_skills=jd.required_skills,
+            preferred_skills=jd.preferred_skills,
+            education_requirements=jd.education_requirements,
+            experience_requirements=jd.experience_requirements,
+            keywords=jd.keywords,
+            job_site_type=job_site_type,
+            open_to_visa_sponsorship=jd.open_to_visa_sponsorship,
+        )
+        logger.info(f"Successfully created new job application in DB!")
 
         return {
             "job_application_id": job_application_id,
@@ -283,61 +265,36 @@ def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
         normalized_base_url = normalize_url(base_url)
 
         # Look up job application by normalized URL
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT id, job_title, company, status FROM public.job_applications WHERE user_id = %s AND normalized_url = %s LIMIT 1",
-                (user_id, normalized_base_url)
-            )
-            job_record = cursor.fetchone()
+        job_record = job_app_repo.get_status_by_normalized_url(user_id, normalized_base_url)
+        if not job_record:
+            return JobStatusResponse(found=False, page_type=page_type)
 
-            if not job_record:
-                # Job not found
-                return JobStatusResponse(
-                    found=False,
-                    page_type=page_type
-                )
+        job_application_id = str(job_record["id"])
+        job_title = job_record["job_title"]
+        company = job_record["company"]
+        job_status = job_record["status"]
 
-            job_application_id = str(job_record[0])
-            job_title = job_record[1]
-            company = job_record[2]
-            job_status = job_record[3]
+        # Determine application state based on job_applications.status and autofill_runs
+        run_id = autofill_repo.get_latest_completed_run_id(job_application_id, user_id)
 
-            # Determine application state based on job_applications.status and autofill_runs
-            run_id = None
-            if job_status == "applied":
-                state = "applied"
-                # Fetch the most recent run_id even for applied state (for reference)
-                cursor.execute(
-                    "SELECT id FROM public.autofill_runs WHERE job_application_id = %s AND user_id = %s AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
-                    (job_application_id, user_id)
-                )
-                run_record = cursor.fetchone()
-                if run_record:
-                    run_id = str(run_record[0])
-            else:
-                # Check if any completed autofill run exists and get the most recent run_id
-                cursor.execute(
-                    "SELECT id FROM public.autofill_runs WHERE job_application_id = %s AND user_id = %s AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
-                    (job_application_id, user_id)
-                )
-                run_record = cursor.fetchone()
-                if run_record:
-                    state = "autofill_generated"
-                    run_id = str(run_record[0])
-                else:
-                    state = "jd_extracted"
+        if job_status == "applied":
+            state = "applied"
+        elif run_id:
+            state = "autofill_generated"
+        else:
+            state = "jd_extracted"
 
-            logger.info(f"Job status found for job_application_id={job_application_id}, state={state}, page_type={page_type}, job_title={job_title}, company={company}")
+        logger.info(f"Job status found for job_application_id={job_application_id}, state={state}, page_type={page_type}")
 
-            return JobStatusResponse(
-                found=True,
-                page_type=page_type,
-                state=state,
-                job_application_id=job_application_id,
-                job_title=job_title,
-                company=company,
-                run_id=run_id
-            )
+        return JobStatusResponse(
+            found=True,
+            page_type=page_type,
+            state=state,
+            job_application_id=job_application_id,
+            job_title=job_title,
+            company=company,
+            run_id=run_id,
+        )
 
     except HTTPException:
         raise
@@ -365,126 +322,114 @@ def get_autofill_plan(body: AutofillPlanRequest, authorization: str = Header(Non
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-        # check if job_application_id belongs to the user_id
-        if not check_if_job_application_belongs_to_user(user_id, body.job_application_id, supabase):
+        # Check if job_application_id belongs to the user_id
+        if not job_app_repo.belongs_to_user(body.job_application_id, user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job application")
-        
+
         normalized_job_url = normalize_url(body.page_url)
         dom_html_hashed = hashlib.sha256(body.dom_html.encode('utf-8')).hexdigest()
 
         # Generate signed URL for user's resume (for file upload fields)
         resume_signed_url = None
         try:
-            with supabase.db_connection.cursor() as cursor:
-                cursor.execute("SELECT resume FROM public.users WHERE id=%s", (user_id,))
-                resume_row = cursor.fetchone()
-                if resume_row and resume_row[0]:
-                    storage = supabase.client.storage.from_("user-documents")
-                    signed_urls_response = storage.create_signed_urls(
-                        paths=[resume_row[0]],
-                        expires_in=3600
-                    )
-                    if isinstance(signed_urls_response, list) and len(signed_urls_response) > 0:
-                        first_result = signed_urls_response[0]
-                        if isinstance(first_result, dict):
-                            resume_signed_url = first_result.get('signedURL') or first_result.get('signed_url')
-                        elif hasattr(first_result, 'signedURL'):
-                            resume_signed_url = first_result.signedURL
-                        elif hasattr(first_result, 'signed_url'):
-                            resume_signed_url = first_result.signed_url
+            resume_path = user_repo.get_resume_path(user_id)
+            if resume_path:
+                storage = supabase.client.storage.from_("user-documents")
+                signed_urls_response = storage.create_signed_urls(paths=[resume_path], expires_in=3600)
+                if isinstance(signed_urls_response, list) and len(signed_urls_response) > 0:
+                    first_result = signed_urls_response[0]
+                    if isinstance(first_result, dict):
+                        resume_signed_url = first_result.get('signedURL') or first_result.get('signed_url')
+                    elif hasattr(first_result, 'signedURL'):
+                        resume_signed_url = first_result.signedURL
+                    elif hasattr(first_result, 'signed_url'):
+                        resume_signed_url = first_result.signed_url
         except Exception as e:
             logger.warning(f"Could not generate resume signed URL: {e}")
 
-        # check if an autofill plan already exists for this job application + page
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("SELECT id, status, plan_json, plan_summary FROM public.autofill_runs WHERE job_application_id=%s AND user_id=%s AND page_url=%s AND plan_json IS NOT NULL AND status='completed' ORDER BY created_at DESC LIMIT 1", (body.job_application_id, user_id, normalized_job_url))
-            result = cursor.fetchone()
-            if result:
-                autofill_run_id = result[0]
-                status = result[1]
-                plan_json = result[2]
-                plan_summary = result[3]
-
-                response = AutofillPlanResponse(
-                    run_id=autofill_run_id,
-                    status=status,
-                    plan_json=plan_json,
-                    plan_summary=plan_summary,
-                    resume_url=resume_signed_url
-                )
-                logger.info("Autofill plan response: %s", json.dumps(response.model_dump(), ensure_ascii=False))
-                return response
-        
-        # If not, create a new autofill plan
-        
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("INSERT INTO public.autofill_runs (user_id, job_application_id, page_url, dom_html, dom_html_hash, dom_captured_at, status, created_at) VALUES(%s, %s, %s, %s, %s, NOW(), %s, NOW()) RETURNING id", (user_id, body.job_application_id, normalized_job_url, body.dom_html, dom_html_hashed, 'running'))
-            autofill_run_id = cursor.fetchone()[0]
-            supabase.db_connection.commit()
-
-            # building the input for the DAG
-            autofill_agent_input = AutofillAgentInput(
-                run_id=autofill_run_id,
-                job_application_id=body.job_application_id,
-                user_id=user_id,
-                page_url=normalized_job_url,
-                dom_html=body.dom_html,
-                extracted_fields=[field.model_dump() for field in body.extracted_fields]
+        # Check if an autofill plan already exists for this job application + page
+        existing_plan = autofill_repo.get_completed_plan(body.job_application_id, user_id, normalized_job_url)
+        if existing_plan:
+            response = AutofillPlanResponse(
+                run_id=existing_plan["id"],
+                status=existing_plan["status"],
+                plan_json=existing_plan["plan_json"],
+                plan_summary=existing_plan["plan_summary"],
+                resume_url=resume_signed_url,
             )
-            
-            # fetching the extracted JD details from DB
-            cursor.execute("SELECT job_title, company, job_posted, job_description, job_site_type, required_skills, preferred_skills, education_requirements, experience_requirements, keywords, open_to_visa_sponsorship FROM public.job_applications WHERE id=%s", (body.job_application_id,))
-            jd_record = cursor.fetchone()
-            if jd_record:
-                autofill_agent_input.job_title = jd_record[0]
-                autofill_agent_input.company = jd_record[1]
-                autofill_agent_input.job_posted = jd_record[2]
-                autofill_agent_input.job_description = jd_record[3]
-                autofill_agent_input.job_site_type = jd_record[4]
-                autofill_agent_input.required_skills = jd_record[5]
-                autofill_agent_input.preferred_skills = jd_record[6]
-                autofill_agent_input.education_requirements = jd_record[7]
-                autofill_agent_input.experience_requirements = jd_record[8]
-                autofill_agent_input.keywords = jd_record[9]
-                autofill_agent_input.open_to_visa_sponsorship = jd_record[10]
+            logger.info("Autofill plan response: %s", json.dumps(response.model_dump(), ensure_ascii=False))
+            return response
+        
+        # Create a new autofill run
+        autofill_run_id = autofill_repo.create_run(
+            user_id=user_id,
+            job_application_id=body.job_application_id,
+            page_url=normalized_job_url,
+            dom_html=body.dom_html,
+            dom_html_hash=dom_html_hashed,
+        )
 
-            # fetching the user details and resume information from DB
-            cursor.execute("SELECT email, full_name, first_name, last_name, phone_number, linkedin_url, github_url, portfolio_url, other_url, resume, resume_profile, address, city, state, zip_code, country, authorized_to_work_in_us, visa_sponsorship, visa_sponsorship_type, desired_salary, desired_location, gender, race, veteran_status, disability_status FROM public.users WHERE id=%s", (user_id,))
-            user_record = cursor.fetchone()
-            if user_record:
-                autofill_agent_input.email = user_record[0]
-                autofill_agent_input.full_name = user_record[1]
-                autofill_agent_input.first_name = user_record[2]
-                autofill_agent_input.last_name = user_record[3]
-                autofill_agent_input.phone_number = user_record[4]
-                autofill_agent_input.linkedin_url = user_record[5]
-                autofill_agent_input.github_url = user_record[6]
-                autofill_agent_input.portfolio_url = user_record[7]
-                autofill_agent_input.other_url = user_record[8]
-                autofill_agent_input.resume_file_path = user_record[9]
-                resume_profile = user_record[10]
-                if isinstance(resume_profile, str):
-                    try:
-                        resume_profile = json.loads(resume_profile)
-                    except json.JSONDecodeError:
-                        resume_profile = None
-                autofill_agent_input.resume_profile = resume_profile
-                autofill_agent_input.address = user_record[11]
-                autofill_agent_input.city = user_record[12]
-                autofill_agent_input.state = user_record[13]
-                autofill_agent_input.zip_code = user_record[14]
-                autofill_agent_input.country = user_record[15]
-                autofill_agent_input.authorized_to_work_in_us = user_record[16]
-                autofill_agent_input.visa_sponsorship = user_record[17]
-                autofill_agent_input.visa_sponsorship_type = user_record[18]
-                autofill_agent_input.desired_salary = user_record[19]
-                autofill_agent_input.desired_location = user_record[20]
-                autofill_agent_input.gender = user_record[21]
-                autofill_agent_input.race = user_record[22]
-                autofill_agent_input.veteran_status = user_record[23]
-                autofill_agent_input.disability_status = user_record[24]
+        # Build the input for the DAG
+        autofill_agent_input = AutofillAgentInput(
+            run_id=autofill_run_id,
+            job_application_id=body.job_application_id,
+            user_id=user_id,
+            page_url=normalized_job_url,
+            dom_html=body.dom_html,
+            extracted_fields=[field.model_dump() for field in body.extracted_fields],
+        )
 
-        # trigger the autofill agent DAG
+        # Fetch the extracted JD details
+        jd_record = job_app_repo.get_for_autofill(body.job_application_id)
+        if jd_record:
+            autofill_agent_input.job_title = jd_record["job_title"]
+            autofill_agent_input.company = jd_record["company"]
+            autofill_agent_input.job_posted = jd_record["job_posted"]
+            autofill_agent_input.job_description = jd_record["job_description"]
+            autofill_agent_input.job_site_type = jd_record["job_site_type"]
+            autofill_agent_input.required_skills = jd_record["required_skills"]
+            autofill_agent_input.preferred_skills = jd_record["preferred_skills"]
+            autofill_agent_input.education_requirements = jd_record["education_requirements"]
+            autofill_agent_input.experience_requirements = jd_record["experience_requirements"]
+            autofill_agent_input.keywords = jd_record["keywords"]
+            autofill_agent_input.open_to_visa_sponsorship = jd_record["open_to_visa_sponsorship"]
+
+        # Fetch user details and resume information
+        user_record = user_repo.get_for_autofill(user_id)
+        if user_record:
+            autofill_agent_input.email = user_record["email"]
+            autofill_agent_input.full_name = user_record["full_name"]
+            autofill_agent_input.first_name = user_record["first_name"]
+            autofill_agent_input.last_name = user_record["last_name"]
+            autofill_agent_input.phone_number = user_record["phone_number"]
+            autofill_agent_input.linkedin_url = user_record["linkedin_url"]
+            autofill_agent_input.github_url = user_record["github_url"]
+            autofill_agent_input.portfolio_url = user_record["portfolio_url"]
+            autofill_agent_input.other_url = user_record["other_url"]
+            autofill_agent_input.resume_file_path = user_record["resume"]
+            resume_profile = user_record["resume_profile"]
+            if isinstance(resume_profile, str):
+                try:
+                    resume_profile = json.loads(resume_profile)
+                except json.JSONDecodeError:
+                    resume_profile = None
+            autofill_agent_input.resume_profile = resume_profile
+            autofill_agent_input.address = user_record["address"]
+            autofill_agent_input.city = user_record["city"]
+            autofill_agent_input.state = user_record["state"]
+            autofill_agent_input.zip_code = user_record["zip_code"]
+            autofill_agent_input.country = user_record["country"]
+            autofill_agent_input.authorized_to_work_in_us = user_record["authorized_to_work_in_us"]
+            autofill_agent_input.visa_sponsorship = user_record["visa_sponsorship"]
+            autofill_agent_input.visa_sponsorship_type = user_record["visa_sponsorship_type"]
+            autofill_agent_input.desired_salary = user_record["desired_salary"]
+            autofill_agent_input.desired_location = user_record["desired_location"]
+            autofill_agent_input.gender = user_record["gender"]
+            autofill_agent_input.race = user_record["race"]
+            autofill_agent_input.veteran_status = user_record["veteran_status"]
+            autofill_agent_input.disability_status = user_record["disability_status"]
+
+        # Trigger the autofill agent DAG
         dag_result = dag.app.invoke({"input_data": autofill_agent_input.model_dump()})
         autofill_agent_output = AutofillAgentOutput(
             status=dag_result.get("status"),
@@ -529,13 +474,10 @@ def push_autofill_event(body: AutofillEventRequest, authorization: str = Header(
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-        if not check_if_run_id_belongs_to_user(body.run_id, user_id, supabase):
+        if not autofill_repo.run_belongs_to_user(body.run_id, user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this autofill run")
-        
-        # Store the event in the database
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("INSERT INTO public.autofill_events (run_id, user_id, event_type, payload, created_at) VALUES(%s, %s, %s, %s, NOW())", (body.run_id, user_id, body.event_type, json.dumps(body.payload) if body.payload is not None else None))
-            supabase.db_connection.commit()
+
+        autofill_repo.create_event(body.run_id, user_id, body.event_type, body.payload)
 
         return {"status": "success"}
 
@@ -563,13 +505,13 @@ def submit_autofill_feedback(body: AutofillFeedbackRequest, authorization: str =
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token") 
         
-        if not check_if_run_id_belongs_to_user(body.run_id, user_id, supabase):
+        if not autofill_repo.run_belongs_to_user(body.run_id, user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this autofill run")
 
-        # Store the feedback in the database
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("INSERT INTO public.autofill_feedback (run_id, job_application_id, user_id, question_signature, correction, created_at) VALUES(%s, %s, %s, %s, %s, NOW())", (body.run_id, body.job_application_id, user_id, body.question_signature, body.correction))
-            supabase.db_connection.commit()
+        autofill_repo.create_feedback(
+            body.run_id, body.job_application_id, user_id, body.question_signature, body.correction
+        )
+
         return {"status": "success"}
     except HTTPException:
         raise
@@ -596,21 +538,13 @@ def submit_autofill_application(body: AutofillSubmitRequest, authorization: str 
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        if not check_if_run_id_belongs_to_user(body.run_id, user_id, supabase):
+        if not autofill_repo.run_belongs_to_user(body.run_id, user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this autofill run")
 
-        # Store the submission in the database
-        with supabase.db_connection.cursor() as cursor:
-            # update the public.autofill_runs table to mark the status as 'submitted'
-            cursor.execute("UPDATE public.autofill_runs SET status = 'submitted', updated_at = NOW() WHERE id = %s", (body.run_id,))
-
-            # also update the public.job_applications table to mark the application as 'applied'
-            cursor.execute("UPDATE public.job_applications SET status = 'applied', updated_at = NOW() WHERE id = (SELECT job_application_id FROM public.autofill_runs WHERE id = %s)", (body.run_id,))
-            
-            # insert an event in the public.autofill_events table
-            cursor.execute("INSERT INTO public.autofill_events (run_id, user_id, event_type, payload, created_at) VALUES(%s, %s, %s, %s, NOW())", (body.run_id, user_id, 'application_submitted', json.dumps(body.payload) if body.payload is not None else None))
-
-            supabase.db_connection.commit()
+        # Mark run as submitted and job as applied
+        autofill_repo.mark_run_submitted(body.run_id)
+        autofill_repo.mark_job_as_applied_from_run(body.run_id)
+        autofill_repo.create_event(body.run_id, user_id, 'application_submitted', body.payload)
 
         return {"status": "success"}
     except HTTPException:
@@ -641,36 +575,20 @@ def get_resume_match(body: ResumeMatchRequest, authorization: str = Header(None)
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-        if not check_if_job_application_belongs_to_user(user_id, body.job_application_id, supabase):
+        if not job_app_repo.belongs_to_user(body.job_application_id, user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job application")
 
-        with supabase.db_connection.cursor() as cursor:
-            # Get JD keywords and skills
-            cursor.execute(
-                "SELECT required_skills, preferred_skills, keywords FROM public.job_applications WHERE id = %s",
-                (body.job_application_id,)
-            )
-            jd_row = cursor.fetchone()
-            if not jd_row:
-                raise HTTPException(status_code=404, detail="Job application not found")
+        # Get JD keywords and skills
+        jd_row = job_app_repo.get_keywords_and_skills(body.job_application_id)
+        if not jd_row:
+            raise HTTPException(status_code=404, detail="Job application not found")
 
-            required_skills = jd_row[0] or []
-            preferred_skills = jd_row[1] or []
-            keywords = jd_row[2] or []
+        required_skills = jd_row["required_skills"] or []
+        preferred_skills = jd_row["preferred_skills"] or []
+        keywords = jd_row["keywords"] or []
 
-            # Get user's resume profile
-            cursor.execute(
-                "SELECT resume_profile FROM public.users WHERE id = %s",
-                (user_id,)
-            )
-            user_row = cursor.fetchone()
-            resume_profile = user_row[0] if user_row else None
-
-            if isinstance(resume_profile, str):
-                try:
-                    resume_profile = json.loads(resume_profile)
-                except json.JSONDecodeError:
-                    resume_profile = None
+        # Get user's resume profile
+        resume_profile = user_repo.get_resume_profile(user_id)
 
         # Extract resume skills and text
         resume_skills = []
@@ -742,36 +660,23 @@ def get_autofill_events(job_application_id: str, authorization: str = Header(Non
             raise HTTPException(status_code=401, detail="Invalid token")
         user_id = user_response.user.id
 
-        if not check_if_job_application_belongs_to_user(user_id, job_application_id, supabase):
+        if not job_app_repo.belongs_to_user(job_application_id, user_id):
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job application")
 
-        with supabase.db_connection.cursor() as cursor:
-            # Get events for all runs associated with this job application
-            cursor.execute("""
-                SELECT e.id, e.run_id, e.event_type, e.payload, e.created_at
-                FROM public.autofill_events e
-                JOIN public.autofill_runs r ON e.run_id = r.id
-                WHERE r.job_application_id = %s AND r.user_id = %s
-                ORDER BY e.created_at DESC
-                LIMIT 100
-            """, (job_application_id, user_id))
+        rows = autofill_repo.get_events_for_job_application(job_application_id, user_id)
 
-            rows = cursor.fetchall()
-
-            events = []
-            for row in rows:
-                events.append(AutofillEventResponse(
-                    id=str(row[0]),
-                    run_id=str(row[1]),
-                    event_type=row[2],
-                    payload=row[3] if row[3] else None,
-                    created_at=row[4].isoformat() if row[4] else None
-                ))
-
-            return AutofillEventsListResponse(
-                events=events,
-                total_count=len(events)
+        events = [
+            AutofillEventResponse(
+                id=str(row["id"]),
+                run_id=str(row["run_id"]),
+                event_type=row["event_type"],
+                payload=row["payload"] if row["payload"] else None,
+                created_at=row["created_at"].isoformat() if row["created_at"] else None,
             )
+            for row in rows
+        ]
+
+        return AutofillEventsListResponse(events=events, total_count=len(events))
 
     except HTTPException:
         raise

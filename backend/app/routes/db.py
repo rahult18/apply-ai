@@ -6,6 +6,7 @@ import json
 import os
 from app.services.supabase import Supabase
 from app.services.llm import LLM
+from app.repositories import UserRepository, JobApplicationRepository
 from app.utils import parse_resume
 
 # initialize LLM client
@@ -13,6 +14,8 @@ llm = LLM()
 
 # initialize supabase
 supabase = Supabase()
+user_repo = UserRepository(supabase.db_connection)
+job_app_repo = JobApplicationRepository(supabase.db_connection)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,52 +33,46 @@ def get_profile(authorization: str = Header(None)):
             raise HTTPException(status_code=401, detail="Invalid token")
 
         user_id = user_response.user.id
-        
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-            columns = [desc[0] for desc in cursor.description]
-            user_data = cursor.fetchone()
-            
-            if user_data is None:
-                raise HTTPException(status_code=404, detail="User profile not found")
-            
-            # Convert tuple to dictionary
-            result = dict(zip(columns, user_data))
-            
-            # Generate signed URL for resume if it exists
-            if result.get('resume'):
-                try:
-                    resume_path = result['resume']
-                    storage = supabase.client.storage.from_("user-documents")
-                    
-                    # Create signed URL (valid for 1 hour)
-                    # Using create_signed_urls with a single path (returns a list)
-                    signed_urls_response = storage.create_signed_urls(
-                        paths=[resume_path],
-                        expires_in=3600  # 1 hour
-                    )
-                    
-                    # Extract the signed URL from the response
-                    # The response is a list of dicts with 'signedURL' key
-                    if isinstance(signed_urls_response, list) and len(signed_urls_response) > 0:
-                        first_result = signed_urls_response[0]
-                        if isinstance(first_result, dict):
-                            result['resume_url'] = first_result.get('signedURL') or first_result.get('signed_url')
-                        elif hasattr(first_result, 'signedURL'):
-                            result['resume_url'] = first_result.signedURL
-                        elif hasattr(first_result, 'signed_url'):
-                            result['resume_url'] = first_result.signed_url
-                        else:
-                            logger.warning(f"Unexpected signed URL response format: {type(first_result)}")
-                            result['resume_url'] = None
+
+        result = user_repo.get_by_id(user_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        # Convert RealDictRow to regular dict for modification
+        result = dict(result)
+
+        # Generate signed URL for resume if it exists
+        if result.get('resume'):
+            try:
+                resume_path = result['resume']
+                storage = supabase.client.storage.from_("user-documents")
+
+                # Create signed URL (valid for 1 hour)
+                signed_urls_response = storage.create_signed_urls(
+                    paths=[resume_path],
+                    expires_in=3600
+                )
+
+                # Extract the signed URL from the response
+                if isinstance(signed_urls_response, list) and len(signed_urls_response) > 0:
+                    first_result = signed_urls_response[0]
+                    if isinstance(first_result, dict):
+                        result['resume_url'] = first_result.get('signedURL') or first_result.get('signed_url')
+                    elif hasattr(first_result, 'signedURL'):
+                        result['resume_url'] = first_result.signedURL
+                    elif hasattr(first_result, 'signed_url'):
+                        result['resume_url'] = first_result.signed_url
                     else:
-                        logger.warning(f"Unexpected signed URLs response: {type(signed_urls_response)}")
+                        logger.warning(f"Unexpected signed URL response format: {type(first_result)}")
                         result['resume_url'] = None
-                except Exception as e:
-                    logger.error(f"Error generating signed URL for resume: {str(e)}")
+                else:
+                    logger.warning(f"Unexpected signed URLs response: {type(signed_urls_response)}")
                     result['resume_url'] = None
-            
-            return result
+            except Exception as e:
+                logger.error(f"Error generating signed URL for resume: {str(e)}")
+                result['resume_url'] = None
+
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -95,14 +92,8 @@ def get_all_applications(authorization: str = Header(None)):
             raise HTTPException(status_code=401, detail="Invalid token")
 
         user_id = user_response.user.id
-        
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("SELECT * FROM job_applications WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
-            columns = [desc[0] for desc in cursor.description]
-            applications = cursor.fetchall()
-            # Convert tuples to dictionaries
-            result = [dict(zip(columns, row)) for row in applications]
-            return result
+
+        return job_app_repo.get_all_for_user(user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -196,114 +187,60 @@ async def update_profile(
                 raise HTTPException(status_code=500, detail=f"Failed to upload resume: {str(upload_error)}")
 
         # Parse desired_location if provided (JSON string from form)
-        desired_location_list = None
+        desired_location_parsed = None
         if desired_location:
             try:
-                desired_location_list = json.loads(desired_location) if isinstance(desired_location, str) else desired_location
+                desired_location_parsed = json.loads(desired_location) if isinstance(desired_location, str) else desired_location
             except json.JSONDecodeError:
-                # If it's already a list or invalid, use as is
-                desired_location_list = desired_location if isinstance(desired_location, list) else None
+                desired_location_parsed = desired_location if isinstance(desired_location, list) else None
 
-        # Build dynamic UPDATE query with only provided fields
-        update_fields = []
-        update_values = []
-        
-        if full_name is not None:
-            update_fields.append("full_name = %s")
-            update_values.append(full_name)
-        if first_name is not None:
-            update_fields.append("first_name = %s")
-            update_values.append(first_name)
-        if last_name is not None:
-            update_fields.append("last_name = %s")
-            update_values.append(last_name)
-        if email is not None:
-            update_fields.append("email = %s")
-            update_values.append(email)
-        if phone_number is not None:
-            update_fields.append("phone_number = %s")
-            update_values.append(phone_number)
-        if linkedin_url is not None:
-            update_fields.append("linkedin_url = %s")
-            update_values.append(linkedin_url)
-        if github_url is not None:
-            update_fields.append("github_url = %s")
-            update_values.append(github_url)
-        if portfolio_url is not None:
-            update_fields.append("portfolio_url = %s")
-            update_values.append(portfolio_url)
-        if other_url is not None:
-            update_fields.append("other_url = %s")
-            update_values.append(other_url)
-        if resume_url is not None:
-            update_fields.append("resume = %s")
-            update_values.append(resume_url)
-        if address is not None:
-            update_fields.append("address = %s")
-            update_values.append(address)
-        if city is not None:
-            update_fields.append("city = %s")
-            update_values.append(city)
-        if state is not None:
-            update_fields.append("state = %s")
-            update_values.append(state)
-        if zip_code is not None:
-            update_fields.append("zip_code = %s")
-            update_values.append(zip_code)
-        if country is not None:
-            update_fields.append("country = %s")
-            update_values.append(country)
-        if authorized_to_work_in_us is not None:
-            update_fields.append("authorized_to_work_in_us = %s")
-            update_values.append(authorized_to_work_in_us)
-        if visa_sponsorship is not None:
-            update_fields.append("visa_sponsorship = %s")
-            update_values.append(visa_sponsorship)
-        if visa_sponsorship_type is not None:
-            update_fields.append("visa_sponsorship_type = %s")
-            update_values.append(visa_sponsorship_type)
-        if desired_salary is not None:
-            update_fields.append("desired_salary = %s")
-            update_values.append(desired_salary)
-        if desired_location_list is not None:
-            update_fields.append("desired_location = %s")
-            update_values.append(desired_location_list)
-        if gender is not None:
-            update_fields.append("gender = %s")
-            update_values.append(gender)
-        if race is not None:
-            update_fields.append("race = %s")
-            update_values.append(race)
-        if veteran_status is not None:
-            update_fields.append("veteran_status = %s")
-            update_values.append(veteran_status)
-        if disability_status is not None:
-            update_fields.append("disability_status = %s")
-            update_values.append(disability_status)
-        if open_to_relocation is not None:
-            update_fields.append("open_to_relocation = %s")
-            update_values.append(open_to_relocation)
+        # Parse resume_profile if provided (JSON string from form)
+        resume_profile_parsed = None
         if resume_profile is not None:
             try:
-                resume_profile_data = json.loads(resume_profile)
-                update_fields.append("resume_profile = %s")
-                update_values.append(json.dumps(resume_profile_data))
+                resume_profile_parsed = json.dumps(json.loads(resume_profile))
             except json.JSONDecodeError:
                 logger.warning("Invalid JSON for resume_profile, skipping")
 
-        # Only update if there are fields to update
-        if not update_fields:
+        # Build updates dict (None values are skipped by repository)
+        updates = {
+            "full_name": full_name,
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email,
+            "phone_number": phone_number,
+            "linkedin_url": linkedin_url,
+            "github_url": github_url,
+            "portfolio_url": portfolio_url,
+            "other_url": other_url,
+            "resume": resume_url,
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip_code": zip_code,
+            "country": country,
+            "authorized_to_work_in_us": authorized_to_work_in_us,
+            "visa_sponsorship": visa_sponsorship,
+            "visa_sponsorship_type": visa_sponsorship_type,
+            "desired_salary": desired_salary,
+            "desired_location": desired_location_parsed,
+            "gender": gender,
+            "race": race,
+            "veteran_status": veteran_status,
+            "disability_status": disability_status,
+            "open_to_relocation": open_to_relocation,
+            "resume_profile": resume_profile_parsed,
+        }
+
+        # Filter out None values
+        updates = {k: v for k, v in updates.items() if v is not None}
+
+        if not updates:
             raise HTTPException(status_code=400, detail="No fields provided to update")
 
-        # Add user_id for WHERE clause
-        update_values.append(user_id)
-        
         # Execute UPDATE query
         try:
-            with supabase.db_connection.cursor() as cursor:
-                update_query = f"UPDATE users SET {', '.join(update_fields)}, resume_parse_status = 'In progress', updated_at = NOW() WHERE id = %s"
-                cursor.execute(update_query, update_values)
-                supabase.db_connection.commit()
+            user_repo.update(user_id, updates)
         except Exception as db_error:
             # Rollback: delete uploaded file if DB update fails
             if uploaded_file_path:

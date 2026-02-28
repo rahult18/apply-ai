@@ -1,12 +1,14 @@
 from fastapi import APIRouter, HTTPException, Header
 from app.models import RequestBody
 from app.services.supabase import Supabase
+from app.repositories import UserRepository
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Initialize Supabase client
 supabase = Supabase()
+user_repo = UserRepository(supabase.db_connection)
 
 router = APIRouter()
 
@@ -17,11 +19,8 @@ def signup(body: RequestBody):
         
         if data.user is None:
             raise HTTPException(status_code=400, detail="Signup failed")
-        
-        #insert row into DB: public.users table
-        with supabase.db_connection.cursor() as cursor:
-            cursor.execute("INSERT INTO users (id, email) VALUES (%s, %s)", (data.user.id, data.user.email))
-            supabase.db_connection.commit()
+
+        user_repo.create(data.user.id, data.user.email)
 
         # If session is None, email confirmation is required
         if data.session is None:
@@ -92,27 +91,15 @@ def get_current_user(authorization: str = Header(None)):
         user_id = user_response.user.id
 
         # Fetch user's name and avatar from the users table
-        first_name = None
-        full_name = None
-        avatar_url = None
-        try:
-            with supabase.db_connection.cursor() as cursor:
-                cursor.execute("SELECT first_name, full_name, avatar_url FROM users WHERE id = %s", (user_id,))
-                row = cursor.fetchone()
-                if row:
-                    first_name = row[0]
-                    full_name = row[1]
-                    avatar_url = row[2]
-        except Exception as db_error:
-            logger.warning(f"Could not fetch user data: {str(db_error)}")
+        user_info = user_repo.get_basic_info(user_id)
 
         # Return user info as expected by frontend
         return {
             "email": user_response.user.email,
             "id": user_id,
-            "first_name": first_name,
-            "full_name": full_name,
-            "avatar_url": avatar_url
+            "first_name": user_info.get("first_name") if user_info else None,
+            "full_name": user_info.get("full_name") if user_info else None,
+            "avatar_url": user_info.get("avatar_url") if user_info else None,
         }
     except HTTPException:
         raise
