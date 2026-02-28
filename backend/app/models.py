@@ -194,12 +194,14 @@ class JobStatusRequest(BaseModel):
 
 class JobStatusResponse(BaseModel):
     found: bool
-    page_type: str  # "jd" | "application" | "combined" | "unknown"
+    page_type: str = "unknown"  # "jd" | "application" | "combined" | "unknown"
     state: Optional[str] = None  # "jd_extracted" | "autofill_generated" | "applied"
     job_application_id: Optional[str] = None
     job_title: Optional[str] = None
     company: Optional[str] = None
     run_id: Optional[str] = None  # Most recent completed autofill run_id (for mark-as-applied)
+    current_page_autofilled: bool = False  # Whether THIS specific page has been autofilled
+    plan_summary: Optional[dict] = None  # { total_fields, autofilled_fields, suggested_fields, skipped_fields }
 
 
 class ResumeMatchRequest(BaseModel):

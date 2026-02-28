@@ -71,6 +71,18 @@ class AutofillRepository:
             row = cursor.fetchone()
             return str(row["id"]) if row else None
 
+    def get_completed_run_for_page(self, job_application_id: str, user_id: str, page_url: str) -> dict | None:
+        """Get the completed run for a specific page, including plan_summary."""
+        with get_cursor(self.connection) as cursor:
+            cursor.execute("""
+                SELECT id, status, plan_summary
+                FROM autofill_runs
+                WHERE job_application_id = %s AND user_id = %s AND page_url = %s
+                  AND status = 'completed' AND plan_json IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+            """, (job_application_id, user_id, page_url))
+            return cursor.fetchone()
+
     def create_run(
         self,
         user_id: str,

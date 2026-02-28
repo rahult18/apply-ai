@@ -83,7 +83,7 @@ def exchange_one_time_code_for_token(body: ExchangeRequestBody):
         # Generate JWT token
         data = {
             'sub': user_id,
-            'exp': datetime.utcnow() + timedelta(minutes=180),
+            'exp': datetime.utcnow() + timedelta(days=7),
             'iss': 'applyai-api',
             'aud': 'applyai-extension',
             'install_id': body.install_id
@@ -284,7 +284,15 @@ def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
         else:
             state = "jd_extracted"
 
-        logger.info(f"Job status found for job_application_id={job_application_id}, state={state}, page_type={page_type}")
+        # Check if THIS specific page has been autofilled (page-level, not job-level)
+        current_page_url = normalize_url(body.url)
+        page_run = autofill_repo.get_completed_run_for_page(job_application_id, user_id, current_page_url)
+
+        current_page_autofilled = page_run is not None
+        page_run_id = str(page_run["id"]) if page_run else None
+        page_plan_summary = page_run["plan_summary"] if page_run else None
+
+        logger.info(f"Job status found for job_application_id={job_application_id}, state={state}, page_type={page_type}, current_page_autofilled={current_page_autofilled}")
 
         return JobStatusResponse(
             found=True,
@@ -293,7 +301,9 @@ def get_job_status(body: JobStatusRequest, authorization: str = Header(None)):
             job_application_id=job_application_id,
             job_title=job_title,
             company=company,
-            run_id=run_id,
+            run_id=page_run_id or run_id,  # Prefer page-specific run_id, fallback to job-level
+            current_page_autofilled=current_page_autofilled,
+            plan_summary=page_plan_summary,
         )
 
     except HTTPException:

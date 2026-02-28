@@ -115,6 +115,14 @@ export const useExtension = () => {
         if (status.run_id) {
           setLastRunId(status.run_id);
         }
+
+        // Restore autofillStats from plan_summary (page-specific)
+        if (status.plan_summary) {
+          setAutofillStats({
+            filled: status.plan_summary.autofilled_fields || 0,
+            skipped: status.plan_summary.skipped_fields || 0
+          });
+        }
       } else {
         // No job found for this URL - but don't reset if we just completed an action
         // (extraction/autofill/applied result should be trusted over status check)

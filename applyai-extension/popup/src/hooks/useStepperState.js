@@ -103,10 +103,11 @@ export const useStepperState = (
       }
 
       // Job found - autofill step
-      const isAutofilled = sessionState === 'autofilled' || jobStatus?.state === 'autofill_generated';
+      // Use page-specific autofill status to determine button label
+      const isCurrentPageAutofilled = sessionState === 'autofilled' || jobStatus?.current_page_autofilled;
       return {
         label: sessionState === 'autofilling' ? 'Generating...' :
-               isAutofilled ? 'Autofill Again' : 'Generate Autofill',
+               isCurrentPageAutofilled ? 'Autofill Again' : 'Generate Autofill',
         handler: 'generateAutofill',
         icon: ACTION_ICONS.autofill,
         loading: sessionState === 'autofilling',
