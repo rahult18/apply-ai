@@ -98,28 +98,38 @@ This folder contains the browser extension for the ApplyAI project. It includes 
 - `popup/`: Extension popup UI (React + Vite + Tailwind)
   - `index.html` (13 lines): Entry point that loads the built popup.js from Vite
   - `src/main.jsx` (11 lines): React entry point that renders Popup component into #root
-  - `src/Popup.jsx` (~220 lines): Main popup component with stepper-driven architecture:
+  - `src/Popup.jsx` (~284 lines): Main popup component with stepper-driven architecture:
     - Uses `useExtension` hook for state/actions and `useStepperState` hook for UI derivation
-    - Header card: Logo (sky gradient badge with BoltIcon), "ApplyAI" title, subtitle, StatusPill
-    - **ProgressStepper**: 4-step visual progress bar (Connect → Extract → Autofill → Applied)
-    - **Tabbed interface** (when connected + job extracted): Autofill tab and Resume Score tab
-      - Tabs component switches between autofill workflow and resume match display
+    - **Outer container**: 380px width, 500px min-height, `shadow-[inset_0_0_0_1px_rgba(0,0,0,0.07)]` to soften native popup border (replaces harsh black edge)
+    - **Header** (floating, no card): Sky gradient logo badge (BoltIcon), "ApplyAI" title, StatusPill — `px-4 pt-4 pb-3` with no card border
+    - **ProgressStepper**: 4-step progress bar wrapped in `px-4 pb-3`, followed by `border-t border-gray-100` divider
+    - **Tabbed interface** (when connected + job found): Autofill tab and Resume Score tab
       - Resume Score tab lazy-loads match data via `fetchResumeMatch()` when selected
-    - Main content card with conditional sections:
-      - StatusMessage for operation progress/errors
-      - JobCard for extracted job info
-      - Autofill stats (green success box: "Filled X fields, skipped Y")
-      - **"Mark as Applied" button**: Appears after autofill completion, calls `markAsApplied()`
-      - Applied badge (green checkmark pill)
-      - **ResumeMatchCard**: Displays resume match score, matched/missing keywords (in Resume Score tab)
-    - **Single dynamic primary action button** driven by `useStepperState`:
-      - Disconnected → "Connect to ApplyAI"
-      - No job + JD page → "Extract Job"
-      - No job + application page → "Extract Job First" (disabled, with hint)
-      - Job found → "Generate Autofill" / "Autofill Again"
-    - Secondary buttons (when connected): Dashboard, Debug (2-column grid), Disconnect
-    - Layout: 380px width, 500px min-height, gray background
-  - `src/style.css` (25 lines): Tailwind CSS styles (light theme with good contrast)
+    - **Content card**: `m-3 bg-white rounded-2xl border border-gray-100 shadow-md overflow-hidden`
+      - Skeleton loader: animated 3-line shimmer when `isCheckingStatus && !jobStatus && connected`
+      - **Autofill tab** content (when not skeleton):
+        - StatusMessage for operation progress/errors
+        - JobCard with extracted job info + "Extracted Xm ago" timestamp
+        - **NavCue** (amber banner): shown when `jobStatus?.page_type === 'jd' && showJobCard` — guides user to navigate to application page for Lever/Ashby jobs
+        - Autofill stats (green box: "Filled X fields, skipped Y · Xm ago")
+        - **"Mark as Applied"** (lg primary, sole CTA when `sessionState === 'autofilled'`)
+        - **Applied badge** (green pill, when `sessionState === 'applied'`)
+        - **Primary action button** (hidden when autofilled or applied): driven by `useStepperState`, changes label/icon contextually
+        - Hint text when primary action is disabled
+      - **Resume Score tab**: ResumeMatchCard component
+    - **Footer utility strip** (inside card, below `p-4` div, `border-t border-gray-100 bg-gray-50 rounded-b-2xl`):
+      - Only shown when `connectionStatus === 'connected'`
+      - `autofilled` state: 3 items — `[↺ Run Again]` `[⊞ Dashboard]` `[→ Disconnect]`
+      - All other connected states: 2 items — `[⊞ Dashboard]` `[→ Disconnect]`
+      - Each item: `flex-1`, icon + text, `text-xs`, hover highlight (white bg), no borders
+      - Disconnect: `text-red-400 hover:text-red-600 hover:bg-red-50`
+  - `src/style.css`: Tailwind CSS with explicit animation fixes for Chrome extension popup throttling
+    - **Root cause fix**: Chrome extension popups throttle CSS animations. All keyframes defined explicitly in CSS and forced with `animation-play-state: running !important`
+    - `@keyframes spin` → `.animate-spin` (0.85s linear infinite, play-state forced)
+    - `@keyframes pulse-subtle` → `.animate-pulse-subtle` (3s ease-in-out infinite)
+    - `@keyframes slide-up` → `.animate-slide-up` (0.3s ease-out)
+    - `@keyframes shimmer` → `.skeleton` utility class (shimmer gradient, 1.4s infinite) for skeleton loaders
+    - Custom scrollbar: 6px width, rounded thumb
   - `src/components/`:
     - `ActionButton.jsx` (55 lines): Reusable button component with variants and sizes
       - Variants: primary (sky-600), secondary (white/border), ghost (gray-100), danger (red-50/border)
@@ -131,23 +141,30 @@ This folder contains the browser extension for the ApplyAI project. It includes 
       - error: Red
       - working: Sky blue with pulse animation
       - Accepts custom `text` prop (no longer hardcoded labels)
-    - `Icons.jsx` (80 lines): SVG icon components used throughout the popup
+    - `Icons.jsx`: SVG icon components used throughout the popup
       - CheckIcon, LinkIcon, DocumentTextIcon, SparklesIcon, CheckBadgeIcon
-      - Squares2X2Icon (dashboard), BugAntIcon (debug), BoltIcon (logo), BriefcaseIcon (job card)
-      - ArrowRightOnRectangleIcon (disconnect), SpinnerIcon (loading animation)
-    - `ProgressStepper.jsx` (77 lines): Visual 4-step progress indicator
+      - Squares2X2Icon (dashboard), BoltIcon (logo), BriefcaseIcon (job card)
+      - ArrowRightOnRectangleIcon (disconnect), ArrowPathIcon (run again / circular refresh), SpinnerIcon (loading animation)
+    - `ProgressStepper.jsx`: Visual 4-step progress indicator (flat, no card wrapper)
       - Steps: Connect → Extract → Autofill → Applied
       - Step states: completed (green circle + checkmark), active (sky circle + ring), pending (gray circle)
       - Connector lines between steps (green when completed, gray otherwise)
-      - Icons mapped per step: LinkIcon, DocumentTextIcon, SparklesIcon, CheckBadgeIcon
+      - Component renders a bare `flex items-center` row — caller handles padding
     - `StatusMessage.jsx` (52 lines): Alert/notification component
       - Types: info, success, error, warning with color-coded backgrounds
       - Icons: Info circle, check circle, alert circle, warning triangle
       - Features: Slide-up animation
-    - `JobCard.jsx` (27 lines): Compact card displaying extracted job information
+    - `JobCard.jsx`: Compact card displaying extracted job information
       - BriefcaseIcon in sky gradient badge
       - Job title (semibold, truncated) and company name (gray, truncated)
-      - Styling: White background, border, rounded-xl, shadow-sm
+      - **`extractedAt` prop**: displays "Extracted Xm ago" inline with company name (using `timeAgo()` helper)
+      - Styling: `bg-sky-50 border-sky-100` rounded-xl
+    - `NavCue.jsx` (new): Amber navigation banner for Lever/Ashby job boards
+      - Shown when user is on JD page with a saved job (needs to navigate to application form)
+      - Props: `applyUrl` (nullable string)
+      - If `applyUrl` provided (Lever/Ashby): shows "Open Application" button that calls `chrome.tabs.create({ url: applyUrl })`
+      - If no `applyUrl`: shows instructional text only ("Navigate to the application form page")
+      - Styling: `bg-amber-50 border-amber-200` with warning triangle icon, `animate-slide-up` entrance
     - `Tabs.jsx`: Tab navigation component for switching between Autofill and Resume Score views
       - Accepts tabs array, activeTab, and onTabChange callback
       - Renders horizontal tab bar with active state styling
@@ -156,14 +173,17 @@ This folder contains the browser extension for the ApplyAI project. It includes 
       - Loading state with skeleton UI
       - Helps users understand how well their resume matches the job requirements
   - `src/hooks/`:
-    - `useExtension.js` (~376 lines): Custom hook managing extension state and messaging
-      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats, **jobStatus**, **isCheckingStatus**, **resumeMatch**, **isLoadingMatch**, **lastRunId**, **isMarkingApplied**
+    - `useExtension.js` (~452 lines): Custom hook managing extension state and messaging
+      - State: connectionStatus, userEmail, userName, sessionState, statusMessage, extractedJob, autofillStats, **jobStatus**, **isCheckingStatus**, **resumeMatch**, **isLoadingMatch**, **lastRunId**, **isMarkingApplied**, **currentTabUrl**, **applyUrl**, **extractedAt**, **autofilledAt**
       - SessionState values: idle, extracting, extracted, autofilling, autofilled, **applied**, error
-      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), debugExtractFields(), **checkJobStatus()**, **fetchResumeMatch()**, **markAsApplied()**
-      - **generateAutofill()**: Sends `APPLYAI_AUTOFILL_PLAN` message with `job_application_id` from `jobStatus` state (not relying on background script's `lastIngest` storage)
-      - **checkJobStatus()**: Calls `POST /extension/jobs/status` with current tab URL to get job application state. Updates sessionState based on response (applied, autofilled, extracted, idle). Restores `lastRunId` from status response. **Restores `autofillStats` from `plan_summary`** (page-specific). Uses `skipNextResetRef` to prevent state reset after completing actions. Auto-refreshes after JD extraction.
-      - **fetchResumeMatch()**: Calls `POST /extension/resume-match` with job_application_id. Returns score, matched_keywords, missing_keywords for display in ResumeMatchCard.
-      - **markAsApplied()**: Sends `APPLYAI_MARK_APPLIED` message with `lastRunId` (stored from autofill result). Updates sessionState to 'applied' on success.
+      - Refs: `skipNextResetRef` (prevents state reset after completing actions), `currentJobIdRef` (always holds current job_application_id for async message handlers)
+      - Functions: checkConnection(), connect(), disconnect(), openDashboard(), extractJob(), generateAutofill(), **checkJobStatus()**, **fetchResumeMatch()**, **markAsApplied()**
+      - **`deriveApplyUrl(tabUrl, pageType)`**: Client-side helper that constructs the application form URL from the current tab URL. Detects Lever (`lever.co` → appends `/apply`) and Ashby (`ashbyhq.com` → appends `/application`). No backend required.
+      - **`checkJobStatus()`**: Calls `POST /extension/jobs/status` with current tab URL. Updates sessionState, sets `currentTabUrl`, `applyUrl` (via `deriveApplyUrl`), and restores timestamps from `chrome.storage.local`. Handles provisional timestamp association (see Storage Schema). Uses `skipNextResetRef` to prevent state reset after completing actions.
+      - **`generateAutofill()`**: Sends `APPLYAI_AUTOFILL_PLAN` message with `job_application_id` from `jobStatus` state
+      - **`fetchResumeMatch()`**: Calls `POST /extension/resume-match` with job_application_id. Returns score, matched_keywords, missing_keywords.
+      - **`markAsApplied()`**: Sends `APPLYAI_MARK_APPLIED` message with `lastRunId`. Updates sessionState to 'applied' on success.
+      - **Timestamp handling**: After extraction, saves provisional `{ extractedAt, autofilledAt: null }` to storage (no job_application_id yet). `checkJobStatus()` detects provisional entry and associates it with the correct `job_application_id`. After autofill, saves `{ job_application_id, extractedAt, autofilledAt }` using `currentJobIdRef.current`.
       - Message listeners for: APPLYAI_EXTENSION_CONNECTED, APPLYAI_EXTRACT_JD_PROGRESS, APPLYAI_EXTRACT_JD_RESULT, APPLYAI_AUTOFILL_PROGRESS, APPLYAI_AUTOFILL_RESULT, **APPLYAI_MARK_APPLIED_RESULT**
       - Initialization: Checks connection on mount, then checks job status if connected
       - API URLs: APP_BASE_URL (localhost:3000), API_BASE_URL (localhost:8000)
@@ -177,7 +197,7 @@ This folder contains the browser extension for the ApplyAI project. It includes 
         - No job + non-application page → "Extract Job" (handler: extractJob)
         - No job + application page → "Extract Job First" (disabled, with hint)
         - Job found → "Generate Autofill" / "Autofill Again" (uses `current_page_autofilled` for page-specific label)
-      - **Visibility flags**: showJobCard, showStatusMessage, messageType
+      - **Visibility flags**: showJobCard (currentStepIndex >= 2 && hasJob), showStatusMessage, messageType
       - All values memoized via `useMemo` on input dependencies
 
 ## Purpose
@@ -185,6 +205,7 @@ This folder provides the browser extension for the ApplyAI project. The extensio
 1. **Connect** their browser to their ApplyAI account via secure one-time code authentication
 2. **Extract** job descriptions from job posting pages and save them to the tracker
 3. **Autofill** job application forms using AI-generated plans based on user profile and saved job data
+4. **Track** application state (extracted → autofilled → applied) with timestamps and resume match scoring
 
 The extension acts as a bridge between the user's browser and the ApplyAI backend, providing seamless integration for job application tracking and form automation.
 
@@ -235,20 +256,6 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
    - Fills values and triggers appropriate events
 9. Popup displays filled field count
 
-### 4. Debug Extraction Flow (For Troubleshooting)
-1. User navigates to job application form page
-2. User clicks "🐛 Extract Form Fields (Debug)" button in popup
-3. Background script runs `extractFormFieldsWithDropdownInteraction()`:
-   - Same extraction logic as production autofill
-   - Detailed console logging to page console showing:
-     - Total field count
-     - Fields with options count
-     - Warnings for dropdowns with no options
-     - Summary table of all fields
-     - Full JSON data for analysis
-4. Popup displays field count and success status
-5. Developer opens page console to view detailed extraction results
-
 ## Key Technical Features
 - **Secure Authentication**: One-time code exchange for JWT tokens, stored in chrome.storage.local
 - **DOM Extraction**: On-demand script injection to capture full page HTML (with 2.5MB size limit)
@@ -281,11 +288,7 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
   - Restores job context (title, company) and application state from server
   - Enables smart button display based on page type and job state
 - **URL Security**: Prevents access to restricted URLs (chrome://, edge://, about:, file://)
-- **Debug Tools**: Verbose extraction mode with detailed console logging for troubleshooting
-  - Always-visible debug button in popup
-  - Comprehensive field extraction analysis
-  - Warnings for failed dropdown extractions
-  - Full JSON output for manual inspection
+- **Debug Tools**: `extractFormFieldsWithDropdownInteraction()` in background.js for verbose console-level extraction analysis (not exposed in popup UI)
 
 ## Backend API Endpoints
 - `POST /extension/connect/exchange`: Exchange one-time code for JWT token
@@ -355,25 +358,47 @@ The extension acts as a bridge between the user's browser and the ApplyAI backen
 - **postcss.config.js** (7 lines):
   - Plugins: @tailwindcss/postcss, autoprefixer
 
-- **style.css** (25 lines):
+- **style.css**:
   - Imports Tailwind CSS via `@import "tailwindcss";`
   - Body: background #f9fafb (light gray), color #111827 (dark gray)
-  - Custom scrollbar: 8px width, gray track (#f3f4f6), rounded thumb (#d1d5db → #9ca3af on hover)
+  - Custom scrollbar: 6px width, gray track (#f3f4f6), rounded thumb (#d1d5db → #9ca3af on hover)
+  - **Explicit animation keyframes** (required for Chrome extension popup animation throttling):
+    - `@keyframes spin` → `.animate-spin` (0.85s linear, forced running)
+    - `@keyframes pulse-subtle` → `.animate-pulse-subtle` (3s, forced running)
+    - `@keyframes slide-up` → `.animate-slide-up` (0.3s ease-out)
+    - `@keyframes shimmer` → `.skeleton` (shimmer gradient bg-size 400px, 1.4s infinite)
+  - All animation classes include `animation-play-state: running !important` to override Chrome's throttling
 
-## UI Architecture (v0.1.0+)
+## UI Architecture (v0.2.0+)
 
+- **Three-tier visual hierarchy**:
+  1. **Primary zone**: Single dominant CTA (the natural next step) — `size="lg"` sky-600 ActionButton
+  2. **Content card**: Job info, stats, status messages — `bg-white rounded-2xl shadow-md`
+  3. **Footer utility strip**: Compact icon+text row for secondary/utility/destructive actions
 - **Stepper-Driven Design**: All UI state derived from `useStepperState` hook
   - Single source of truth: connectionStatus + sessionState + jobStatus → derived UI
   - 4-step progress visualization: Connect → Extract → Autofill → Applied
   - Dynamic primary action button changes label, icon, loading/disabled state contextually
-- **Component Library**: Reusable SVG icon components (`Icons.jsx`) replace inline SVGs and emojis
-- **Card-Based Layout**: Header card, stepper card, and content card with consistent rounded-xl styling
-- **Color System**: Sky-600 primary, green for success/completed, amber for warnings, red for errors
-- **Button Sizes**: lg (primary actions), md (secondary grid), sm (disconnect)
+  - Primary action button is **hidden** in `autofilled` and `applied` states (footer and badge take over)
+- **Footer Strip** (Grammarly-inspired compact bottom bar):
+  - Inside card, separated by `border-t border-gray-100`, `bg-gray-50 rounded-b-2xl`
+  - `autofilled`: 3 items — ↺ Run Again, ⊞ Dashboard, → Disconnect
+  - All other connected states: 2 items — ⊞ Dashboard, → Disconnect
+  - Disconnected: footer hidden entirely
+- **Nav Cue** (Lever/Ashby flow): Amber banner shown when user is on JD page with saved job, guiding them to navigate to application form. Optionally includes direct link button for known platform URLs.
+- **Timestamps**: Extraction and autofill times stored locally in `chrome.storage.local` (backend doesn't return them). Displayed as relative time ("3m ago") in JobCard and autofill stats.
+- **Skeleton Loader**: 3-line shimmer animation during initial status check (`isCheckingStatus && !jobStatus`)
+- **Animation Fix**: Chrome extension popups throttle CSS animations — all keyframes defined explicitly in `style.css` with `animation-play-state: running !important`
+- **Component Library**: Reusable SVG icon components (`Icons.jsx`) replace inline SVGs
+- **Color System**: Sky-600 primary, green for success/completed, amber for warnings/nav cues, red for errors/disconnect
 - **Status Indicators**: StatusPill with dynamic text from stepper state
-- **Responsive Animations**: pulse-subtle for working state, transition-all on step circles/connectors
 
 ## Storage Schema
 - `installId`: Unique UUID for extension installation
 - `extensionToken`: JWT token for backend authentication
 - `lastIngest`: Last job extraction result (includes job_application_id, job_title, company, timestamp, success status)
+- `jobTimestamps`: Timestamps for the most recently interacted job application
+  - Shape: `{ job_application_id?: string, extractedAt?: string (ISO), autofilledAt?: string (ISO) }`
+  - Written provisionally (without `job_application_id`) immediately after extraction, then associated with the correct ID by `checkJobStatus()` once the backend returns it
+  - Keyed by `job_application_id` — if the current job doesn't match, timestamps are ignored
+  - Cleared on disconnect or when a new job is extracted on a different page

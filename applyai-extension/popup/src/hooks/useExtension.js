@@ -7,9 +7,54 @@ const storageGet = (keys) => {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
 };
 
+const storageSet = (items) => {
+  return new Promise((resolve) => chrome.storage.local.set(items, resolve));
+};
+
 const storageRemove = (keys) => {
   return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
 };
+
+// ─── Apply URL derivation ─────────────────────────────────────────────────────
+// For Lever/Ashby JD pages we can construct the application form URL by
+// appending the platform-specific suffix to the current tab URL.
+
+function deriveApplyUrl(tabUrl, pageType) {
+  if (!tabUrl || pageType !== 'jd') return null;
+  try {
+    const url = new URL(tabUrl);
+    const host = url.hostname;
+    if (host.includes('lever.co')) {
+      return tabUrl.replace(/\/?$/, '/apply');
+    }
+    if (host.includes('ashbyhq.com')) {
+      return tabUrl.replace(/\/?$/, '/application');
+    }
+  } catch {
+    // Invalid URL
+  }
+  return null;
+}
+
+// ─── Timestamp helpers ────────────────────────────────────────────────────────
+
+async function saveTimestamps(jobApplicationId, patch) {
+  const { jobTimestamps } = await storageGet(['jobTimestamps']);
+  const existing = jobTimestamps?.job_application_id === jobApplicationId
+    ? jobTimestamps
+    : { job_application_id: jobApplicationId };
+  await storageSet({ jobTimestamps: { ...existing, ...patch } });
+}
+
+async function loadTimestamps(jobApplicationId) {
+  const { jobTimestamps } = await storageGet(['jobTimestamps']);
+  if (jobTimestamps?.job_application_id === jobApplicationId) {
+    return jobTimestamps;
+  }
+  return null;
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export const useExtension = () => {
   const [connectionStatus, setConnectionStatus] = useState('checking'); // checking | connected | disconnected | error
@@ -19,15 +64,23 @@ export const useExtension = () => {
   const [statusMessage, setStatusMessage] = useState('');
   const [extractedJob, setExtractedJob] = useState(null);
   const [autofillStats, setAutofillStats] = useState(null);
-  const [jobStatus, setJobStatus] = useState(null); // Response from /jobs/status endpoint
+  const [jobStatus, setJobStatus] = useState(null);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-  const [resumeMatch, setResumeMatch] = useState(null); // { score, matched_keywords, missing_keywords }
+  const [resumeMatch, setResumeMatch] = useState(null);
   const [isLoadingMatch, setIsLoadingMatch] = useState(false);
-  const [lastRunId, setLastRunId] = useState(null); // Store run_id from last autofill for marking as applied
+  const [lastRunId, setLastRunId] = useState(null);
   const [isMarkingApplied, setIsMarkingApplied] = useState(false);
+
+  // New state for nav cue and timestamps
+  const [currentTabUrl, setCurrentTabUrl] = useState(null);
+  const [applyUrl, setApplyUrl] = useState(null);
+  const [extractedAt, setExtractedAt] = useState(null);
+  const [autofilledAt, setAutofilledAt] = useState(null);
 
   // Ref to track if we just completed an action (prevents checkJobStatus from resetting state)
   const skipNextResetRef = useRef(false);
+  // Ref to always have the current job_application_id available in async message handlers
+  const currentJobIdRef = useRef(null);
 
   // Check connection status
   const checkConnection = useCallback(async () => {
@@ -54,7 +107,7 @@ export const useExtension = () => {
       setUserEmail(userData?.email || '');
       setUserName(userData?.full_name || '');
       setConnectionStatus('connected');
-      return true; // Return true to indicate successful connection
+      return true;
     } catch (e) {
       console.error('Connection check failed:', e);
       setConnectionStatus('error');
@@ -72,11 +125,12 @@ export const useExtension = () => {
         return;
       }
 
-      // Get current tab URL
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.url) {
         return;
       }
+
+      setCurrentTabUrl(tab.url);
 
       const res = await fetch(`${API_BASE_URL}/extension/jobs/status`, {
         method: 'POST',
@@ -95,14 +149,18 @@ export const useExtension = () => {
       const status = await res.json();
       setJobStatus(status);
 
-      // Update session state and extracted job based on status
+      // Derive apply URL for Lever/Ashby JD pages
+      setApplyUrl(deriveApplyUrl(tab.url, status.page_type));
+
       if (status.found) {
+        const jobId = status.job_application_id;
+        currentJobIdRef.current = jobId;
+
         setExtractedJob({
           title: status.job_title,
           company: status.company
         });
 
-        // Set session state based on application state
         if (status.state === 'applied') {
           setSessionState('applied');
         } else if (status.state === 'autofill_generated') {
@@ -111,28 +169,39 @@ export const useExtension = () => {
           setSessionState('extracted');
         }
 
-        // Restore lastRunId so "Mark as Applied" works after popup is reopened
         if (status.run_id) {
           setLastRunId(status.run_id);
         }
 
-        // Restore autofillStats from plan_summary (page-specific)
         if (status.plan_summary) {
           setAutofillStats({
             filled: status.plan_summary.autofilled_fields || 0,
             skipped: status.plan_summary.skipped_fields || 0
           });
         }
+
+        // Restore or associate timestamps from local storage.
+        // If a provisional entry exists (no job_application_id yet, written right after
+        // extraction before we had the id), associate it now.
+        const { jobTimestamps } = await storageGet(['jobTimestamps']);
+        if (jobTimestamps && !jobTimestamps.job_application_id) {
+          // Provisional — associate with current job
+          await storageSet({ jobTimestamps: { ...jobTimestamps, job_application_id: jobId } });
+          if (jobTimestamps.extractedAt) setExtractedAt(jobTimestamps.extractedAt);
+          if (jobTimestamps.autofilledAt) setAutofilledAt(jobTimestamps.autofilledAt);
+        } else if (jobTimestamps?.job_application_id === jobId) {
+          if (jobTimestamps.extractedAt) setExtractedAt(jobTimestamps.extractedAt);
+          if (jobTimestamps.autofilledAt) setAutofilledAt(jobTimestamps.autofilledAt);
+        }
       } else {
-        // No job found for this URL - but don't reset if we just completed an action
-        // (extraction/autofill/applied result should be trusted over status check)
         if (skipNextResetRef.current) {
-          skipNextResetRef.current = false; // Reset the flag
-          // Keep current state
+          skipNextResetRef.current = false;
         } else {
           setExtractedJob(null);
           setAutofillStats(null);
           setSessionState('idle');
+          setExtractedAt(null);
+          setAutofilledAt(null);
         }
       }
     } catch (e) {
@@ -157,6 +226,9 @@ export const useExtension = () => {
     setStatusMessage('');
     setAutofillStats(null);
     setJobStatus(null);
+    setExtractedAt(null);
+    setAutofilledAt(null);
+    setApplyUrl(null);
   }, []);
 
   // Open dashboard
@@ -198,19 +270,6 @@ export const useExtension = () => {
       }
     });
   }, [jobStatus]);
-
-  // Debug extract fields
-  const debugExtractFields = useCallback(() => {
-    chrome.runtime.sendMessage({ type: 'APPLYAI_DEBUG_EXTRACT_FIELDS' }, (resp) => {
-      if (chrome.runtime.lastError) {
-        setStatusMessage(`Debug Error: ${chrome.runtime.lastError.message}`);
-      } else if (resp?.ok) {
-        setStatusMessage(`Found ${resp.fieldCount} fields (check console for details)`);
-      } else {
-        setStatusMessage(`Debug Error: ${resp?.error || 'Unknown error'}`);
-      }
-    });
-  }, []);
 
   // Fetch resume match score
   const fetchResumeMatch = useCallback(async (jobApplicationId) => {
@@ -275,7 +334,6 @@ export const useExtension = () => {
 
       if (msg?.type === 'APPLYAI_EXTRACT_JD_PROGRESS') {
         if (sessionState !== 'extracting') return;
-
         if (msg.stage === 'starting') setStatusMessage('Starting extraction...');
         if (msg.stage === 'extracting_dom') setStatusMessage('Reading page content...');
         if (msg.stage === 'sending_to_backend') setStatusMessage('Analyzing job posting...');
@@ -283,15 +341,18 @@ export const useExtension = () => {
 
       if (msg?.type === 'APPLYAI_EXTRACT_JD_RESULT') {
         if (msg.ok) {
+          const now = new Date().toISOString();
           setSessionState('extracted');
           setStatusMessage('Job saved successfully!');
-          setExtractedJob({
-            title: msg.job_title,
-            company: msg.company
-          });
-          // Mark that we just completed an action (prevents checkJobStatus from resetting state)
+          setExtractedJob({ title: msg.job_title, company: msg.company });
+          setExtractedAt(now);
+          setAutofilledAt(null); // fresh job, no autofill yet
+
+          // Save provisional timestamp (no job_application_id yet).
+          // checkJobStatus() will read this and associate it with the correct job id.
+          storageSet({ jobTimestamps: { extractedAt: now, autofilledAt: null } });
+
           skipNextResetRef.current = true;
-          // Refresh job status to get updated state
           checkJobStatus();
         } else {
           setSessionState('error');
@@ -301,7 +362,6 @@ export const useExtension = () => {
 
       if (msg?.type === 'APPLYAI_AUTOFILL_PROGRESS') {
         if (sessionState !== 'autofilling') return;
-
         if (msg.stage === 'starting') setStatusMessage('Starting autofill...');
         if (msg.stage === 'extracting_dom') setStatusMessage('Reading form...');
         if (msg.stage === 'extracting_fields') setStatusMessage('Analyzing form fields...');
@@ -311,16 +371,24 @@ export const useExtension = () => {
 
       if (msg?.type === 'APPLYAI_AUTOFILL_RESULT') {
         if (msg.ok) {
+          const now = new Date().toISOString();
           setSessionState('autofilled');
           setStatusMessage('Form autofilled successfully!');
-          setAutofillStats({
-            filled: msg.filled,
-            skipped: msg.skipped
+          setAutofillStats({ filled: msg.filled, skipped: msg.skipped });
+          setAutofilledAt(now);
+
+          if (msg.run_id) setLastRunId(msg.run_id);
+
+          // Persist autofill timestamp keyed by current job id
+          storageGet(['jobTimestamps']).then(({ jobTimestamps }) => {
+            storageSet({
+              jobTimestamps: {
+                ...(jobTimestamps || {}),
+                job_application_id: currentJobIdRef.current,
+                autofilledAt: now
+              }
+            });
           });
-          // Store run_id for marking as applied later
-          if (msg.run_id) {
-            setLastRunId(msg.run_id);
-          }
         } else {
           setSessionState('extracted');
           setStatusMessage(`Autofill failed: ${msg.error || 'Unknown error'}`);
@@ -332,9 +400,7 @@ export const useExtension = () => {
         if (msg.ok) {
           setSessionState('applied');
           setStatusMessage('Application marked as applied!');
-          // Mark that we just completed an action (prevents checkJobStatus from resetting state)
           skipNextResetRef.current = true;
-          // Refresh job status
           checkJobStatus();
         } else {
           setStatusMessage(`Failed to mark as applied: ${msg.error || 'Unknown error'}`);
@@ -370,12 +436,15 @@ export const useExtension = () => {
     resumeMatch,
     isLoadingMatch,
     isMarkingApplied,
+    currentTabUrl,
+    applyUrl,
+    extractedAt,
+    autofilledAt,
     connect,
     disconnect,
     openDashboard,
     extractJob,
     generateAutofill,
-    debugExtractFields,
     checkJobStatus,
     fetchResumeMatch,
     markAsApplied

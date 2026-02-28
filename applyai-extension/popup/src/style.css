@@ -5,9 +5,59 @@ body {
   color: #111827;
 }
 
+/* ─── Explicit keyframes ───────────────────────────────────────────────────────
+   Chrome extension popups throttle CSS animations because the document starts
+   in a non-active rendering state. Defining keyframes here and forcing
+   animation-play-state: running overrides that throttling.
+─────────────────────────────────────────────────────────────────────────────── */
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+@keyframes slide-up {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+/* Force animations active regardless of browser throttling */
+.animate-spin {
+  animation: spin 0.85s linear infinite;
+  animation-play-state: running !important;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation-play-state: running !important;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out both;
+  animation-play-state: running !important;
+}
+
+/* Skeleton shimmer for loading states */
+.skeleton {
+  background: linear-gradient(90deg, #f3f4f6 25%, #e9eaec 50%, #f3f4f6 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  animation-play-state: running !important;
+}
+
 /* Custom scrollbar for light theme */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 ::-webkit-scrollbar-track {
