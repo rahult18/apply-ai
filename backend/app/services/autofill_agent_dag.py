@@ -374,7 +374,7 @@ class DAG():
 
         try:
             supabase = Supabase()
-            with supabase.db_connection.cursor() as cursor:
+            with supabase.get_raw_cursor() as cursor:
                 cursor.execute(
                     "UPDATE public.autofill_runs SET plan_json=%s, plan_summary=%s, status=%s, updated_at=NOW() WHERE id=%s",
                     (json.dumps(plan_json), json.dumps(plan_summary), status, run_id),
@@ -383,7 +383,7 @@ class DAG():
                     logger.error("No autofill_run row updated for run_id=%s", run_id)
                 else:
                     logger.info("Updated autofill_run row for run_id=%s", run_id)
-                supabase.db_connection.commit()
+                pass  # commit handled by get_raw_cursor context manager
         except Exception as e:
             logger.error("Failed to update autofill_run for run_id=%s: %s", run_id, str(e))
             errors.append(f"Error in assemble_autofill_plan_node: {str(e)}")

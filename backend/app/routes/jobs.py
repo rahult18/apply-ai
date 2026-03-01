@@ -108,7 +108,7 @@ def search_jobs(
             LIMIT %s OFFSET %s
         """
 
-        with supabase.db_connection.cursor() as cursor:
+        with supabase.get_raw_cursor() as cursor:
             # Get total count
             cursor.execute(count_query, params)
             total_count = cursor.fetchone()[0]

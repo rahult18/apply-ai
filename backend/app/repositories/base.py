@@ -1,7 +1,7 @@
 """
 Base repository utilities.
 
-Provides RealDictCursor context manager for automatic dict conversion
+Provides a thread-safe RealDictCursor context manager using a connection pool,
 and common query building helpers.
 """
 from contextlib import contextmanager
@@ -10,20 +10,30 @@ import psycopg2.extras
 
 
 @contextmanager
-def get_cursor(connection):
+def get_cursor(pool):
     """
-    Context manager that yields a RealDictCursor.
+    Thread-safe context manager that checks out a connection from the pool,
+    yields a RealDictCursor, commits on success, rolls back on error,
+    and returns the connection to the pool.
 
     Usage:
-        with get_cursor(supabase.db_connection) as cursor:
+        with get_cursor(supabase.db_pool) as cursor:
             cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
             row = cursor.fetchone()  # Returns dict or None
     """
-    cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    conn = pool.getconn()
     try:
-        yield cursor
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            yield cursor
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
     finally:
-        cursor.close()
+        pool.putconn(conn)
 
 
 def build_update_query(

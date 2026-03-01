@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize Supabase client
 supabase = Supabase()
-user_repo = UserRepository(supabase.db_connection)
+user_repo = UserRepository(supabase.db_pool)
 
 router = APIRouter()
 

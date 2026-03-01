@@ -7,18 +7,18 @@ from app.repositories.base import get_cursor, build_update_query
 
 
 class UserRepository:
-    def __init__(self, connection):
-        self.connection = connection
+    def __init__(self, pool):
+        self.pool = pool
 
     def get_by_id(self, user_id: str) -> dict | None:
         """Get full user profile by ID."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
             return cursor.fetchone()
 
     def get_basic_info(self, user_id: str) -> dict | None:
         """Get basic user info (first_name, full_name, avatar_url)."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute(
                 "SELECT first_name, full_name, avatar_url FROM users WHERE id = %s",
                 (user_id,)
@@ -27,21 +27,21 @@ class UserRepository:
 
     def get_email_from_auth(self, user_id: str) -> str | None:
         """Get email from auth.users table."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute("SELECT email FROM auth.users WHERE id = %s", (user_id,))
             row = cursor.fetchone()
             return row["email"] if row else None
 
     def get_resume_path(self, user_id: str) -> str | None:
         """Get user's resume storage path."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute("SELECT resume FROM users WHERE id = %s", (user_id,))
             row = cursor.fetchone()
             return row["resume"] if row else None
 
     def get_resume_profile(self, user_id: str) -> dict | None:
         """Get user's parsed resume profile (JSON)."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute("SELECT resume_profile FROM users WHERE id = %s", (user_id,))
             row = cursor.fetchone()
             if not row or not row["resume_profile"]:
@@ -56,7 +56,7 @@ class UserRepository:
 
     def get_for_autofill(self, user_id: str) -> dict | None:
         """Get all user fields needed for autofill agent."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute("""
                 SELECT email, full_name, first_name, last_name, phone_number,
                        linkedin_url, github_url, portfolio_url, other_url, resume,
@@ -70,12 +70,12 @@ class UserRepository:
 
     def create(self, user_id: str, email: str) -> None:
         """Create a new user record."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute(
                 "INSERT INTO users (id, email) VALUES (%s, %s)",
                 (user_id, email)
             )
-            self.connection.commit()
+            pass  # commit handled by get_cursor pool context manager
 
     def update(self, user_id: str, updates: dict[str, Any]) -> None:
         """
@@ -94,15 +94,15 @@ class UserRepository:
         if not query:
             return
 
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute(query, params)
-            self.connection.commit()
+            pass  # commit handled by get_cursor pool context manager
 
     def update_resume_profile(self, user_id: str, resume_profile: dict) -> None:
         """Update user's parsed resume profile."""
-        with get_cursor(self.connection) as cursor:
+        with get_cursor(self.pool) as cursor:
             cursor.execute(
                 "UPDATE users SET resume_profile = %s, resume_parse_status = 'Done', updated_at = NOW() WHERE id = %s",
                 (json.dumps(resume_profile), user_id)
             )
-            self.connection.commit()
+            pass  # commit handled by get_cursor pool context manager

@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-
-const APP_BASE_URL = "http://localhost:3000";
-const API_BASE_URL = "http://localhost:8000";
+import { APP_BASE_URL, API_BASE_URL } from '../../../shared/config.js';
 
 const storageGet = (keys) => {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve));

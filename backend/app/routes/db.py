@@ -14,8 +14,8 @@ llm = LLM()
 
 # initialize supabase
 supabase = Supabase()
-user_repo = UserRepository(supabase.db_connection)
-job_app_repo = JobApplicationRepository(supabase.db_connection)
+user_repo = UserRepository(supabase.db_pool)
+job_app_repo = JobApplicationRepository(supabase.db_pool)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

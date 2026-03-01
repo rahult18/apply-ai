@@ -29,9 +29,9 @@ supabase = Supabase()
 # Initialize Autofill Agent DAG
 dag = DAG()
 # Initialize repositories
-user_repo = UserRepository(supabase.db_connection)
-job_app_repo = JobApplicationRepository(supabase.db_connection)
-autofill_repo = AutofillRepository(supabase.db_connection)
+user_repo = UserRepository(supabase.db_pool)
+job_app_repo = JobApplicationRepository(supabase.db_pool)
+autofill_repo = AutofillRepository(supabase.db_pool)
 
 router = APIRouter()
 

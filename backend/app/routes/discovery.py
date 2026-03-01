@@ -90,7 +90,7 @@ async def run_discovery(
         new_count = 0
         updated_count = 0
 
-        with supabase.db_connection.cursor() as cursor:
+        with supabase.get_raw_cursor() as cursor:
             for board in parsed_boards:
                 # Check if exists
                 cursor.execute(
@@ -124,7 +124,7 @@ async def run_discovery(
                     new_count += 1
                     board.is_new = True
 
-            supabase.db_connection.commit()
+            pass  # commit handled by get_raw_cursor context manager
 
         logger.info(f"Discovery complete: {new_count} new, {updated_count} updated")
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 
@@ -12,9 +12,35 @@ interface User {
   avatar_url?: string | null
 }
 
+interface JobApplication {
+  id: string
+  user_id: string
+  job_title: string
+  company: string
+  job_posted: string
+  job_description: string
+  url: string
+  required_skills: string[]
+  preferred_skills: string[]
+  education_requirements: string[]
+  experience_requirements: string[]
+  keywords: string[]
+  job_site_type: string
+  open_to_visa_sponsorship: boolean
+  status: string
+  notes: string | null
+  application_date: string
+  created_at: string
+  updated_at: string
+}
+
 interface AuthContextType {
   user: User | null
   loading: boolean
+  applications: JobApplication[]
+  loadingApplications: boolean
+  applicationsError: boolean
+  refetchApplications: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   signup: (email: string, password: string) => Promise<void>
   loginWithGoogle: () => Promise<void>
@@ -27,12 +53,32 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const supabase = createClient()
 
+const FETCH_TIMEOUT_MS = 10000
+
+async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(id)
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [applications, setApplications] = useState<JobApplication[]>([])
+  const [loadingApplications, setLoadingApplications] = useState(true)
+  const [applicationsError, setApplicationsError] = useState(false)
   const router = useRouter()
+  const authCheckStarted = useRef(false)
 
   useEffect(() => {
+    // Guard against React StrictMode double-invoking this effect,
+    // which would fire two concurrent requests to the backend.
+    if (authCheckStarted.current) return
+    authCheckStarted.current = true
     checkAuth()
   }, [])
 
@@ -45,25 +91,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!token) {
         setLoading(false)
+        setLoadingApplications(false)
         return
       }
 
-      const response = await fetch(`${API_URL}/auth/me`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
+      const headers = { Authorization: `Bearer ${token}` }
 
-      if (response.ok) {
-        const data = await response.json()
+      // Fetch auth + applications in parallel — allSettled so one failure doesn't block the other
+      const [authResult, appsResult] = await Promise.allSettled([
+        fetchWithTimeout(`${API_URL}/auth/me`, { headers }),
+        fetchWithTimeout(`${API_URL}/db/get-all-applications`, { headers }),
+      ])
+
+      if (authResult.status === "fulfilled" && authResult.value.ok) {
+        const data = await authResult.value.json()
         setUser(data)
       } else {
         document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;"
+      }
+
+      if (appsResult.status === "fulfilled" && appsResult.value.ok) {
+        const data = await appsResult.value.json()
+        setApplications(data)
+      } else {
+        setApplicationsError(true)
       }
     } catch (error) {
       console.error("Auth check failed:", error)
     } finally {
       setLoading(false)
+      setLoadingApplications(false)
+    }
+  }
+
+  const refetchApplications = async () => {
+    setLoadingApplications(true)
+    setApplicationsError(false)
+    try {
+      const token = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("token="))
+        ?.split("=")[1]
+
+      if (!token) return
+
+      const response = await fetchWithTimeout(`${API_URL}/db/get-all-applications`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setApplications(data)
+      } else {
+        setApplicationsError(true)
+      }
+    } catch (error) {
+      console.error("Failed to fetch applications:", error)
+      setApplicationsError(true)
+    } finally {
+      setLoadingApplications(false)
     }
   }
 
@@ -155,6 +241,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         loading,
+        applications,
+        loadingApplications,
+        applicationsError,
+        refetchApplications,
         login,
         signup,
         loginWithGoogle,

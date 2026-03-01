@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
+import { useMemo } from "react"
 import { useAuth } from "@/contexts/AuthContext"
 import { KPICard } from "@/components/widgets/KPICard"
 import { StatusChart } from "@/components/widgets/StatusChart"
@@ -8,31 +8,8 @@ import { ApplicationsOverTimeChart } from "@/components/widgets/ApplicationsOver
 import { ApplicationsTable } from "@/components/widgets/ApplicationsTable"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Briefcase, FileCheck, Calendar, Gift, Globe, TrendingUp } from "lucide-react"
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-
-interface JobApplication {
-  id: string
-  user_id: string
-  job_title: string
-  company: string
-  job_posted: string
-  job_description: string
-  url: string
-  required_skills: string[]
-  preferred_skills: string[]
-  education_requirements: string[]
-  experience_requirements: string[]
-  keywords: string[]
-  job_site_type: string
-  open_to_visa_sponsorship: boolean
-  status: string
-  notes: string | null
-  application_date: string
-  created_at: string
-  updated_at: string
-}
+import { Briefcase, FileCheck, Calendar, Gift, Globe, TrendingUp, AlertCircle, RefreshCw } from "lucide-react"
+import { Button } from "@/components/ui/button"
 
 function DashboardSkeleton() {
   return (
@@ -74,44 +51,7 @@ function DashboardSkeleton() {
 }
 
 export default function HomePage() {
-  const { user } = useAuth()
-  const [applications, setApplications] = useState<JobApplication[]>([])
-  const [loadingApplications, setLoadingApplications] = useState(true)
-
-  useEffect(() => {
-    if (user) {
-      fetchApplications()
-    }
-  }, [user])
-
-  const fetchApplications = async () => {
-    try {
-      const token = document.cookie
-        .split("; ")
-        .find((row) => row.startsWith("token="))
-        ?.split("=")[1]
-
-      if (!token) {
-        setLoadingApplications(false)
-        return
-      }
-
-      const response = await fetch(`${API_URL}/db/get-all-applications`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        setApplications(data)
-      }
-    } catch (error) {
-      console.error("Failed to fetch applications:", error)
-    } finally {
-      setLoadingApplications(false)
-    }
-  }
+  const { user, applications, loadingApplications, applicationsError, refetchApplications } = useAuth()
 
   const stats = useMemo(() => {
     const total = applications.length
@@ -171,6 +111,26 @@ export default function HomePage() {
 
   if (loadingApplications) {
     return <DashboardSkeleton />
+  }
+
+  if (applicationsError) {
+    return (
+      <div className="p-6">
+        <Card className="border-destructive/50">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <AlertCircle className="h-8 w-8 text-destructive mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Failed to load dashboard</h3>
+            <p className="text-muted-foreground max-w-sm mb-6">
+              Could not connect to the server. Make sure the backend is running and try again.
+            </p>
+            <Button onClick={refetchApplications} variant="outline">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (

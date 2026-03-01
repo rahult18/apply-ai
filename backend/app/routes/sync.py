@@ -52,7 +52,7 @@ async def run_sync(
             provider_filter = ""
 
         # Fetch active boards to sync (ordered by least recently synced)
-        with supabase.db_connection.cursor() as cursor:
+        with supabase.get_raw_cursor() as cursor:
             query = f"""
                 SELECT id, provider, board_identifier, company_name, failure_count
                 FROM company_boards
@@ -127,7 +127,7 @@ async def sync_single_board(
         jobs_created = 0
         jobs_updated = 0
 
-        with supabase.db_connection.cursor() as cursor:
+        with supabase.get_raw_cursor() as cursor:
             # Get existing job external_ids for this board
             cursor.execute(
                 "SELECT external_id FROM discovered_jobs WHERE board_id = %s",
@@ -227,7 +227,7 @@ async def sync_single_board(
                 (board_id,)
             )
 
-            supabase.db_connection.commit()
+            pass  # commit handled by get_raw_cursor context manager
 
         return BoardSyncResult(
             board_id=board_id,
@@ -263,7 +263,7 @@ async def handle_board_failure(
     should_deactivate = new_failure_count >= MAX_FAILURE_COUNT
 
     try:
-        with supabase.db_connection.cursor() as cursor:
+        with supabase.get_raw_cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE company_boards SET
@@ -275,7 +275,7 @@ async def handle_board_failure(
                 """,
                 (new_failure_count, error_message[:500], not should_deactivate, board_id)
             )
-            supabase.db_connection.commit()
+            pass  # commit handled by get_raw_cursor context manager
 
         if should_deactivate:
             logger.warning(f"Deactivated board {board_identifier} after {MAX_FAILURE_COUNT} consecutive failures")
